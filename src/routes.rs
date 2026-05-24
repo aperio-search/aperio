@@ -52,12 +52,10 @@ async fn search(
     Path(collection): Path<String>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    let sort_desc = params.sort.as_deref().unwrap_or("desc") != "asc";
     let take = params.take.unwrap_or(20).clamp(1, 100);
-    let after = params.after.as_deref();
     let t0 = std::time::Instant::now();
     let (results, total) =
-        state.store.search(&collection, &params.q, sort_desc, take, after)?;
+        state.store.search(&collection, &params.q, take)?;
     let elapsed = t0.elapsed();
     println!(
         "search '{}' on '{}': {:?} ({} hits)",

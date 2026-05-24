@@ -158,9 +158,7 @@ impl Store {
         &self,
         collection: &str,
         query: &str,
-        sort_desc: bool,
         take: usize,
-        after: Option<&str>,
     ) -> Result<(Vec<String>, usize), AppError> {
         let inverted = self.inverted_tree(collection)?;
 
@@ -169,37 +167,26 @@ impl Store {
             return Ok((Vec::new(), 0));
         }
 
-        let mut ids: Option<Vec<String>> = None;
-
-        for word in &words {
+        let read_list = |word: &str| -> Result<Vec<String>, AppError> {
             let key = word.as_bytes();
-            let mut word_ids: Vec<String> = match inverted.get(key)? {
-                Some(data) => serde_json::from_slice(&data).unwrap_or_default(),
-                None => return Ok((Vec::new(), 0)),
-            };
-            word_ids.sort();
+            match inverted.get(key)? {
+                Some(data) => serde_json::from_slice(&data)
+                    .map_err(|e| AppError::Internal(format!("deserialize error: {}", e))),
+                None => Ok(Vec::new()),
+            }
+        };
 
-            match ids {
-                Some(ref mut acc) => acc.retain(|id| word_ids.binary_search(id).is_ok()),
-                None => ids = Some(word_ids),
+        let mut ids = read_list(&words[0])?;
+        for word in &words[1..] {
+            let word_ids: HashSet<String> = read_list(word)?.into_iter().collect();
+            ids.retain(|id| word_ids.contains(id));
+            if ids.is_empty() {
+                return Ok((Vec::new(), 0));
             }
         }
 
-        let mut ids = ids.unwrap_or_default();
         let total = ids.len();
-
-        if sort_desc {
-            ids.reverse();
-        }
-
-        if let Some(cursor) = after {
-            if sort_desc {
-                ids.retain(|id| id.as_str() < cursor);
-            } else {
-                ids.retain(|id| id.as_str() > cursor);
-            }
-        }
-
+        ids.reverse();
         ids.truncate(take);
 
         Ok((ids, total))

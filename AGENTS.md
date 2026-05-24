@@ -34,7 +34,7 @@ There are **no tests** (`cargo test` produces nothing). No linter/formatter conf
 | Method | Path | Body/Query |
 |---|---|---|
 | `POST`   | `/collections/{collection}/items` | `{ "id": "...", "content": "..." }` |
-| `GET`    | `/collections/{collection}/search` | `?q=term&sort=desc&take=20&after=` — returns `{ results: [id, ...], total, take }` |
+| `GET`    | `/collections/{collection}/search` | `?q=term&take=20` — returns `{ results: [id, ...], total, take }` |
 | `GET`    | `/collections/{collection}/suggest` | `?q=prefix` |
 | `DELETE` | `/collections/{collection}/items/{id}` | — |
 | `DELETE` | `/collections/{collection}` | — |
@@ -43,8 +43,8 @@ There are **no tests** (`cargo test` produces nothing). No linter/formatter conf
 ## Query quirks
 
 - Search is **AND-only** (multiple terms, all must match). No OR, no filtering.
-- Sort is by **document ID lexicographic order**, default `DESC`. Use ULID/UUIDv7/zero-padded IDs for predictable ordering.
-- Cursor pagination: `after` is exclusive — in `desc` mode filters IDs < cursor, in `asc` mode filters IDs > cursor. `take` clamped 1–100.
+- Results are returned in **reverse insertion order** (most recently indexed first).
+- `take` clamped 1–100.
 - Suggest returns up to **10 prefix matches** from the inverted index (uses `sled::Tree::scan_prefix`).
 - Tokenization: NFKD normalize → strip combining marks → lowercase → strip non-alphanumeric (configurable via `StoreConfig::strip_punctuation`) → filter tokens shorter than `min_token_length` (default 2).
 
