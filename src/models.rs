@@ -35,3 +35,10 @@ pub struct SuggestResponse {
 pub struct StatusResponse {
     pub ok: bool,
 }
+
+#[derive(Serialize)]
+pub struct CollectionInfo {
+    pub name: String,
+    pub document_count: usize,
+    pub unique_terms: usize,
+}

@@ -7,7 +7,8 @@ use axum::{Json, Router};
 
 use crate::error::AppError;
 use crate::models::{
-    SearchParams, SearchResponse, StatusResponse, SuggestParams, SuggestResponse, UpsertRequest,
+    CollectionInfo, SearchParams, SearchResponse, StatusResponse, SuggestParams, SuggestResponse,
+    UpsertRequest,
 };
 use crate::store::Store;
 
@@ -15,17 +16,18 @@ pub struct AppState {
     pub store: Store,
 }
 
-fn router_with_state(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/status", get(status))
-        .route("/collections/{collection}/items", post(upsert_item))
-        .route("/collections/{collection}/search", get(search))
-        .route("/collections/{collection}/suggest", get(suggest))
-        .route("/collections/{collection}/items/{id}", delete(delete_item))
-        .route("/collections/{collection}", delete(delete_collection))
-        .with_state(state)
-        .fallback(not_found)
-}
+    fn router_with_state(state: Arc<AppState>) -> Router {
+        Router::new()
+            .route("/status", get(status))
+            .route("/collections/{collection}/items", post(upsert_item))
+            .route("/collections/{collection}/search", get(search))
+            .route("/collections/{collection}/suggest", get(suggest))
+            .route("/collections/{collection}/items/{id}", delete(delete_item))
+            .route("/collections/{collection}", get(collection_info))
+            .route("/collections/{collection}", delete(delete_collection))
+            .with_state(state)
+            .fallback(not_found)
+    }
 
 pub fn create_router(store: Store) -> Router {
     let state = Arc::new(AppState { store });
@@ -79,6 +81,14 @@ async fn delete_item(
 ) -> Result<StatusCode, AppError> {
     state.store.delete_item(&collection, &id)?;
     Ok(StatusCode::OK)
+}
+
+async fn collection_info(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> Result<Json<CollectionInfo>, AppError> {
+    let info = state.store.collection_info(&collection)?;
+    Ok(Json(info))
 }
 
 async fn delete_collection(

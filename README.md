@@ -135,7 +135,23 @@ Removes the document from both the internal store and reverses its token mapping
 
 **Response:** `200 OK`
 
-### 5. Delete Collection
+### 5. Collection Info
+
+`GET /collections/:collection`
+
+Returns metadata about the collection, including the number of indexed documents and unique terms in the inverted index.
+
+**Response:** `200 OK`
+
+```json
+{
+  "name": "posts",
+  "document_count": 42,
+  "unique_terms": 318
+}
+```
+
+### 6. Delete Collection
 
 `DELETE /collections/:collection`
 

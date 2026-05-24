@@ -5,6 +5,7 @@ use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::AppError;
+use crate::models::CollectionInfo;
 
 #[derive(Clone)]
 pub struct StoreConfig {
@@ -234,6 +235,16 @@ impl Store {
         docs.remove(id.as_bytes())?;
 
         Ok(())
+    }
+
+    pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
+        let inverted = self.inverted_tree(collection)?;
+        let docs = self.docs_tree(collection)?;
+        Ok(CollectionInfo {
+            name: collection.to_string(),
+            document_count: docs.len(),
+            unique_terms: inverted.len(),
+        })
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
