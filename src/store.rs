@@ -7,13 +7,33 @@ use unicode_normalization::UnicodeNormalization;
 use crate::error::AppError;
 use crate::models::SearchResult;
 
+#[derive(Clone)]
+pub struct StoreConfig {
+    pub min_token_length: usize,
+    pub strip_punctuation: bool,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            min_token_length: 2,
+            strip_punctuation: true,
+        }
+    }
+}
+
 pub struct Store {
     db: Db,
+    config: StoreConfig,
 }
 
 impl Store {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self::with_config(db, StoreConfig::default())
+    }
+
+    pub fn with_config(db: Db, config: StoreConfig) -> Self {
+        Self { db, config }
     }
 
     fn inverted_tree(&self, collection: &str) -> Result<sled::Tree, AppError> {
@@ -24,18 +44,22 @@ impl Store {
         Ok(self.db.open_tree(format!("{}:docs", collection))?)
     }
 
-    fn normalize(word: &str) -> String {
+    fn normalize(word: &str, strip_punctuation: bool) -> String {
         word.nfkd()
             .filter(|c| !is_combining_mark(*c))
             .collect::<String>()
             .to_lowercase()
+            .chars()
+            .filter(|c| !strip_punctuation || c.is_alphanumeric())
+            .collect()
     }
 
-    fn tokenize(content: &str) -> HashSet<String> {
+    fn tokenize(content: &str, config: &StoreConfig) -> HashSet<String> {
         content
             .split_whitespace()
             .filter(|w| !w.is_empty())
-            .map(Self::normalize)
+            .map(|w| Self::normalize(w, config.strip_punctuation))
+            .filter(|w| w.len() >= config.min_token_length)
             .collect()
     }
 
@@ -43,7 +67,7 @@ impl Store {
         let inverted = self.inverted_tree(collection)?;
         let docs = self.docs_tree(collection)?;
 
-        let words = Self::tokenize(content);
+        let words = Self::tokenize(content, &self.config);
 
         for word in &words {
             let key = word.as_bytes();
@@ -77,7 +101,7 @@ impl Store {
         let inverted = self.inverted_tree(collection)?;
         let docs = self.docs_tree(collection)?;
 
-        let words: Vec<String> = Self::tokenize(query).into_iter().collect();
+        let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
         if words.is_empty() {
             return Ok((Vec::new(), 0));
         }
@@ -137,7 +161,7 @@ impl Store {
     pub fn suggest(&self, collection: &str, prefix: &str) -> Result<Vec<String>, AppError> {
         let inverted = self.inverted_tree(collection)?;
         let last_word = prefix.split_whitespace().last().unwrap_or(prefix);
-        let normalized = Self::normalize(last_word);
+        let normalized = Self::normalize(last_word, self.config.strip_punctuation);
         let results: Vec<String> = inverted
             .scan_prefix(normalized.as_bytes())
             .take(10)
@@ -158,7 +182,7 @@ impl Store {
             None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
         };
 
-        let words = Self::tokenize(&content);
+        let words = Self::tokenize(&content, &self.config);
 
         for word in &words {
             let key = word.as_bytes();
