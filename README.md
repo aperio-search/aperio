@@ -33,6 +33,16 @@ Aster utilizes a two-layer key-value layout inside `sled` to handle inversion an
 
 When an item is deleted, Aster fetches the document content, extracts its indexed words, purges the ID from the Inverted Index, and finally drops the item from the Internal Document Store.
 
+### Tokenization & Normalization
+
+Aster processes text through two stages before indexing and searching:
+
+1. **Normalization:** Applies Unicode NFKD decomposition (e.g., `é` → `e` + combining accent), strips combining marks, lowercases the result, and removes non-alphanumeric characters. This makes searches case-insensitive and accent-insensitive, and ensures punctuation like `"hello,"` matches `"hello"`.
+
+2. **Tokenization:** Splits the normalized text on whitespace and discards tokens shorter than the minimum length (default: 2 characters). Short noise words like `"a"` or `"I"` are excluded from the index and search queries.
+
+These settings are configurable via `StoreConfig` when initializing the store in code. By default, punctuation stripping is enabled and the minimum token length is 2.
+
 ## Installation
 
 ```shell
