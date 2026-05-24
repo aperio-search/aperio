@@ -63,26 +63,85 @@ impl Store {
             .collect()
     }
 
+    fn add_to_posting_list(
+        inverted: &sled::Tree,
+        word: &str,
+        id: &str,
+    ) -> Result<(), AppError> {
+        let key = word.as_bytes();
+        loop {
+            let old = inverted.get(key)?;
+            let mut ids: Vec<String> = match old.as_deref() {
+                Some(data) => serde_json::from_slice(data).unwrap_or_default(),
+                None => Vec::new(),
+            };
+
+            if ids.contains(&id.to_string()) {
+                return Ok(());
+            }
+
+            ids.push(id.to_string());
+            let value = serde_json::to_vec(&ids)
+                .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+            match inverted.compare_and_swap(key, old.as_deref(), Some(value))? {
+                Ok(()) => return Ok(()),
+                Err(_) => continue,
+            }
+        }
+    }
+
+    fn remove_from_posting_list(
+        inverted: &sled::Tree,
+        word: &str,
+        id: &str,
+    ) -> Result<(), AppError> {
+        let key = word.as_bytes();
+        loop {
+            let old = inverted.get(key)?;
+            let mut ids: Vec<String> = match old.as_deref() {
+                Some(data) => serde_json::from_slice(data).unwrap_or_default(),
+                None => return Ok(()),
+            };
+
+            let len_before = ids.len();
+            ids.retain(|i| i != id);
+            if ids.len() == len_before {
+                return Ok(());
+            }
+
+            if ids.is_empty() {
+                match inverted.compare_and_swap(key, old.as_deref(), None::<Vec<u8>>)? {
+                    Ok(()) => return Ok(()),
+                    Err(_) => continue,
+                }
+            } else {
+                let value = serde_json::to_vec(&ids)
+                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                match inverted.compare_and_swap(key, old.as_deref(), Some(value))? {
+                    Ok(()) => return Ok(()),
+                    Err(_) => continue,
+                }
+            }
+        }
+    }
+
     pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
         let inverted = self.inverted_tree(collection)?;
         let docs = self.docs_tree(collection)?;
 
-        let words = Self::tokenize(content, &self.config);
+        let new_words = Self::tokenize(content, &self.config);
 
-        for word in &words {
-            let key = word.as_bytes();
-            let mut ids: Vec<String> = match inverted.get(key)? {
-                Some(data) => serde_json::from_slice(&data).unwrap_or_default(),
-                None => Vec::new(),
-            };
-
-            if !ids.contains(&id.to_string()) {
-                ids.push(id.to_string());
-                let value = serde_json::to_vec(&ids).map_err(|e| {
-                    AppError::Internal(format!("serialization error: {}", e))
-                })?;
-                inverted.insert(key, value)?;
+        if let Some(old_data) = docs.get(id.as_bytes())? {
+            let old_content = String::from_utf8(old_data.to_vec())
+                .map_err(|_| AppError::Internal("invalid utf-8 in document store".to_string()))?;
+            let old_words = Self::tokenize(&old_content, &self.config);
+            for word in old_words.difference(&new_words) {
+                Self::remove_from_posting_list(&inverted, word, id)?;
             }
+        }
+
+        for word in &new_words {
+            Self::add_to_posting_list(&inverted, word, id)?;
         }
 
         docs.insert(id.as_bytes(), content.as_bytes())?;
@@ -185,19 +244,7 @@ impl Store {
         let words = Self::tokenize(&content, &self.config);
 
         for word in &words {
-            let key = word.as_bytes();
-            if let Some(data) = inverted.get(key)? {
-                let mut ids: Vec<String> = serde_json::from_slice(&data).unwrap_or_default();
-                ids.retain(|i| i != id);
-                if ids.is_empty() {
-                    inverted.remove(key)?;
-                } else {
-                    let value = serde_json::to_vec(&ids).map_err(|e| {
-                        AppError::Internal(format!("serialization error: {}", e))
-                    })?;
-                    inverted.insert(key, value)?;
-                }
-            }
+            Self::remove_from_posting_list(&inverted, word, id)?;
         }
 
         docs.remove(id.as_bytes())?;

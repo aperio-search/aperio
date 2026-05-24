@@ -153,6 +153,15 @@ Drops an entire collection index and its associated internal storage completely.
 * **Zero-Copy Serialization:** Internal storage uses efficient binary serialization to keep CPU overhead near zero during document ingestion and retrieval.
 * **Fast Cleanups:** Because documents are stored internally by ID, deletion doesn't require sweeping the whole database; it targets only the exact words associated with that specific document.
 
+### Concurrency
+
+Aster uses **sled's `compare_and_swap` (CAS)** for all inverted index mutations to provide **lock-free, per-key atomicity** under concurrent requests. Every upsert and delete that modifies a word's posting list performs an atomic CAS cycle — the list is read, modified in memory, and written back only if the key hasn't changed since the read. On conflict, the operation retries immediately.
+
+This guarantees:
+- **No lost updates** — concurrent inserts for the same word never overwrite each other
+- **No blocking** — no mutex contention; retries are lightweight in-memory operations
+- **Per-key granularity** — different words never contend
+
 ## Local Development
 
 Requires the [Rust toolchain](https://rustup.rs/).
