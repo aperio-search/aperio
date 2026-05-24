@@ -29,9 +29,9 @@ Aster organizes search terms into isolated collections (e.g., `posts` for a blog
 Aster utilizes a two-layer key-value layout inside `sled` to handle inversion and retrieval:
 
 1. **Inverted Index Store:** Maps individual tokens/words to an ascending list of document IDs (`word -> [id1, id2, ...]`).
-2. **Internal Document Store:** Maps the original document ID directly to its raw content (`id -> content`), used for quick cleanups and deletions.
+2. **Token Store:** Maps the original document ID to its pre-computed token array (`id -> ["rust", "sled", ...]`), used for efficient cleanups and deletions without re-tokenizing.
 
-When an item is deleted, Aster fetches the document content, extracts its indexed words, purges the ID from the Inverted Index, and finally drops the item from the Internal Document Store.
+When an item is deleted, Aster reads the stored token set, purges the ID from the Inverted Index for each token, and finally drops the item from the Token Store.
 
 ### Tokenization & Normalization
 
@@ -102,9 +102,7 @@ Multi-word queries perform an **AND** search — only documents matching all ter
 
 ```json
 {
-  "results": [
-    { "id": "01HPT7B2X...", "content": "Rust and sled make a powerful, lightweight combination for embedded databases." }
-  ],
+  "results": ["01HPT7B2X...", "01HQ8C3Y..."],
   "total": 42,
   "take": 20
 }
@@ -151,7 +149,7 @@ Drops an entire collection index and its associated internal storage completely.
 
 * **SSD Native:** `sled` uses a log-structured architecture that avoids random write overhead, turning random operations into sequential disk writes, making it ideal for SSD flash memory.
 * **Zero-Copy Serialization:** Internal storage uses efficient binary serialization to keep CPU overhead near zero during document ingestion and retrieval.
-* **Fast Cleanups:** Because documents are stored internally by ID, deletion doesn't require sweeping the whole database; it targets only the exact words associated with that specific document.
+* **Fast Cleanups:** Pre-computed token sets are stored per document, so deletion doesn't require re-tokenizing content — it reads the cached tokens and removes the ID from each token's posting list directly.
 
 ### Concurrency
 

@@ -5,7 +5,6 @@ use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::AppError;
-use crate::models::SearchResult;
 
 #[derive(Clone)]
 pub struct StoreConfig {
@@ -132,9 +131,9 @@ impl Store {
         let new_words = Self::tokenize(content, &self.config);
 
         if let Some(old_data) = docs.get(id.as_bytes())? {
-            let old_content = String::from_utf8(old_data.to_vec())
-                .map_err(|_| AppError::Internal("invalid utf-8 in document store".to_string()))?;
-            let old_words = Self::tokenize(&old_content, &self.config);
+            let old_tokens: Vec<String> = serde_json::from_slice(&old_data)
+                .map_err(|e| AppError::Internal(format!("deserialize error: {}", e)))?;
+            let old_words: HashSet<String> = old_tokens.into_iter().collect();
             for word in old_words.difference(&new_words) {
                 Self::remove_from_posting_list(&inverted, word, id)?;
             }
@@ -144,7 +143,12 @@ impl Store {
             Self::add_to_posting_list(&inverted, word, id)?;
         }
 
-        docs.insert(id.as_bytes(), content.as_bytes())?;
+        let tokens: Vec<String> = new_words.into_iter().collect();
+        docs.insert(
+            id.as_bytes(),
+            serde_json::to_vec(&tokens)
+                .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?,
+        )?;
 
         Ok(())
     }
@@ -156,9 +160,8 @@ impl Store {
         sort_desc: bool,
         take: usize,
         after: Option<&str>,
-    ) -> Result<(Vec<SearchResult>, usize), AppError> {
+    ) -> Result<(Vec<String>, usize), AppError> {
         let inverted = self.inverted_tree(collection)?;
-        let docs = self.docs_tree(collection)?;
 
         let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
         if words.is_empty() {
@@ -198,23 +201,7 @@ impl Store {
 
         ids.truncate(take);
 
-        let results = ids
-            .iter()
-            .map(|id| {
-                let content = docs
-                    .get(id.as_bytes())
-                    .ok()
-                    .flatten()
-                    .map(|v| String::from_utf8(v.to_vec()).unwrap_or_default())
-                    .unwrap_or_default();
-                SearchResult {
-                    id: id.clone(),
-                    content,
-                }
-            })
-            .collect();
-
-        Ok((results, total))
+        Ok((ids, total))
     }
 
     pub fn suggest(&self, collection: &str, prefix: &str) -> Result<Vec<String>, AppError> {
@@ -234,16 +221,13 @@ impl Store {
         let inverted = self.inverted_tree(collection)?;
         let docs = self.docs_tree(collection)?;
 
-        let content = match docs.get(id.as_bytes())? {
-            Some(data) => String::from_utf8(data.to_vec()).map_err(|_| {
-                AppError::Internal("invalid utf-8 in document store".to_string())
-            })?,
+        let tokens: Vec<String> = match docs.get(id.as_bytes())? {
+            Some(data) => serde_json::from_slice(&data)
+                .map_err(|e| AppError::Internal(format!("deserialize error: {}", e)))?,
             None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
         };
 
-        let words = Self::tokenize(&content, &self.config);
-
-        for word in &words {
+        for word in &tokens {
             Self::remove_from_posting_list(&inverted, word, id)?;
         }
 

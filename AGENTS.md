@@ -34,7 +34,7 @@ There are **no tests** (`cargo test` produces nothing). No linter/formatter conf
 | Method | Path | Body/Query |
 |---|---|---|
 | `POST`   | `/collections/{collection}/items` | `{ "id": "...", "content": "..." }` |
-| `GET`    | `/collections/{collection}/search` | `?q=term&sort=desc&take=20&after=` |
+| `GET`    | `/collections/{collection}/search` | `?q=term&sort=desc&take=20&after=` — returns `{ results: [id, ...], total, take }` |
 | `GET`    | `/collections/{collection}/suggest` | `?q=prefix` |
 | `DELETE` | `/collections/{collection}/items/{id}` | — |
 | `DELETE` | `/collections/{collection}` | — |
@@ -50,7 +50,7 @@ There are **no tests** (`cargo test` produces nothing). No linter/formatter conf
 
 ## Storage layout
 
-Each collection uses two sled trees: `{collection}:inverted` (word→[doc IDs]) and `{collection}:docs` (doc ID→raw content). See `store.rs:39-45`.
+Each collection uses two sled trees: `{collection}:inverted` (word→[doc IDs]) and `{collection}:docs` (doc ID→[tokens] — JSON array of normalized tokens). See `store.rs:39-45`.
 
 ## Docker
 
