@@ -9,7 +9,7 @@ Aster organizes search terms into isolated collections (e.g., `posts` for a blog
 
 - **Lightweight:** Minimal memory footprint, running entirely embedded within your application environment.
 - **No Complex Querying:** No filtering, complex aggregations, or heavy boolean logic—just pure, blazing-fast term matching.
-- **Last-Inserted-First:** Results are returned in reverse insertion order (most recently indexed first).
+- **Sorted Out-of-the-Box:** Results are sorted by document ID (lexicographically). Defaulting to `DESC`, with optional `ASC` retrieval.
 - **Disk-Backed Storage:** Leveraging `sled` for zero-copy, concurrent, thread-safe transactional key-value storage.
 
 > Aster is highly optimized for SSDs as it stores all data on disk. Running Aster on a traditional HDD will result in severely degraded search performance.
@@ -57,7 +57,7 @@ Collections allow you to partition data logically. You can name collections stat
 
 ### Document ID Recommendation
 
-Use any unique identifier for your documents. Document IDs are not used for ordering — results are returned in reverse insertion order.
+Because Aster sorts results by your provided document IDs, using **lexicographically sortable IDs** (such as `ULID`, `UUIDv7`, or zero-padded integers like `000001`) is highly recommended to ensure predictable `ASC`/`DESC` ordering and maximum performance.
 
 ---
 
@@ -83,16 +83,20 @@ Inserts or updates an item in the specified collection.
 
 ### 2. Search Collection
 
-`GET /collections/:collection/search?q=query_term&take=20`
+`GET /collections/:collection/search?q=query_term&sort=desc&take=20&after=`
 
-Multi-word queries perform an **AND** search — only documents matching all terms are returned. Accented characters are normalized (`á` → `a`), making searches case- and accent-insensitive. Results are returned in reverse insertion order (most recently indexed first).
+Multi-word queries perform an **AND** search — only documents matching all terms are returned. Accented characters are normalized (`á` → `a`), making searches case- and accent-insensitive.
 
 **Query Parameters:**
 
 | Param | Default | Description |
 |---|---|---|
 | `q` | — | Search query (one or more terms, space-separated) |
+| `sort` | `desc` | Sort order: `asc` or `desc` |
 | `take` | `20` | Max results to return (clamped 1–100) |
+| `after` | — | Exclusive cursor ID for cursor-based pagination |
+
+**Cursor-based pagination:** Omit `after` for the first page, then pass the last result's `id` as `after` for subsequent pages. In `desc` mode, `after` filters IDs lower than the cursor; in `asc` mode, it filters IDs higher.
 
 **Response:** `200 OK`
 

@@ -9,7 +9,9 @@ pub struct UpsertRequest {
 #[derive(Deserialize)]
 pub struct SearchParams {
     pub q: String,
+    pub sort: Option<String>,
     pub take: Option<usize>,
+    pub after: Option<String>,
 }
 
 #[derive(Serialize)]
