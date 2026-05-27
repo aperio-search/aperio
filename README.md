@@ -1,6 +1,6 @@
 # Aster
 
-[![License](https://img.shields.io/github/license/yourusername/aster)](LICENSE)
+[![License](https://img.shields.io/badge/license-Elastic-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
 An extremely lightweight search engine, heavy optimized for SSDs, built on Rust and Sled.
@@ -188,4 +188,4 @@ cargo run       # Start Aster in development mode
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+This project is licensed under the Elastic License - see the [LICENSE](LICENSE) file for details.
