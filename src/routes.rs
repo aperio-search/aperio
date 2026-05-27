@@ -56,14 +56,13 @@ async fn search(
     let take = params.take.unwrap_or(20).clamp(1, 100);
     let after = params.after.as_deref();
     let t0 = std::time::Instant::now();
-    let (results, total) =
-        state.store.search(&collection, &params.q, sort_desc, take, after)?;
+    let results = state.store.search(&collection, &params.q, sort_desc, take, after)?;
     let elapsed = t0.elapsed();
     println!(
-        "search '{}' on '{}': {:?} ({} hits)",
-        params.q, collection, elapsed, total
+        "search '{}' on '{}': {:?} ({} results)",
+        params.q, collection, elapsed, results.len()
     );
-    Ok(Json(SearchResponse { results, total, take }))
+    Ok(Json(SearchResponse { results, take }))
 }
 
 async fn suggest(

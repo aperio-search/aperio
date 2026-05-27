@@ -17,7 +17,6 @@ pub struct SearchParams {
 #[derive(Serialize)]
 pub struct SearchResponse {
     pub results: Vec<String>,
-    pub total: usize,
     pub take: usize,
 }
 
