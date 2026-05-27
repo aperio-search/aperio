@@ -34,7 +34,7 @@ There are **no tests** (`cargo test` produces nothing). No linter/formatter conf
 | Method | Path | Body/Query |
 |---|---|---|
 | `POST`   | `/collections/{collection}/items` | `{ "id": "...", "content": "..." }` |
-| `GET`    | `/collections/{collection}/search` | `?q=term&sort=desc&take=20&after=` — returns `{ results: [id, ...], total, take }` |
+| `GET`    | `/collections/{collection}/search` | `?q=term&sort=desc&take=20&after=` — returns `{ results: [id, ...], take }` |
 | `GET`    | `/collections/{collection}/suggest` | `?q=prefix` |
 | `DELETE` | `/collections/{collection}/items/{id}` | — |
 | `DELETE` | `/collections/{collection}` | — |

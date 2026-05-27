@@ -103,7 +103,6 @@ Multi-word queries perform an **AND** search — only documents matching all ter
 ```json
 {
   "results": ["01HPT7B2X...", "01HQ8C3Y..."],
-  "total": 42,
   "take": 20
 }
 
