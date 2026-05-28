@@ -6,6 +6,7 @@ use axum::Json;
 pub enum AppError {
     Internal(String),
     NotFound(String),
+    BadRequest(String),
 }
 
 impl IntoResponse for AppError {
@@ -13,6 +14,7 @@ impl IntoResponse for AppError {
         let (status, msg) = match self {
             AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
             AppError::NotFound(e) => (StatusCode::NOT_FOUND, e),
+            AppError::BadRequest(e) => (StatusCode::BAD_REQUEST, e),
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
     }

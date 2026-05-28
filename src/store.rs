@@ -1,12 +1,12 @@
-use std::collections::HashSet;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::AppError;
-use crate::models::CollectionInfo;
+use crate::models::{CollectionCreated, CollectionInfo};
 
 const MAX_SHARD_SIZE: usize = 1000;
 const SHARD_DELIM: char = '\0';
@@ -26,6 +26,13 @@ impl Default for StoreConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdType {
+    Number,
+    String,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct PostingShard {
     first: String,
@@ -37,6 +44,7 @@ pub struct Store {
     db: fjall::Database,
     config: StoreConfig,
     lock: Mutex<()>,
+    collections: RwLock<HashMap<String, IdType>>,
 }
 
 impl Store {
@@ -45,10 +53,27 @@ impl Store {
     }
 
     pub fn with_config(db: fjall::Database, config: StoreConfig) -> Self {
+        let collections = {
+            let mut map = HashMap::new();
+            if let Ok(meta) = db.keyspace("_collections", fjall::KeyspaceCreateOptions::default) {
+                for guard in meta.iter() {
+                    if let Ok((key, value)) = guard.into_inner() {
+                        let name = String::from_utf8_lossy(&key).to_string();
+                        if let Ok((id_type, _)) =
+                            bincode::serde::decode_from_slice(&value, bincode::config::standard())
+                        {
+                            map.insert(name, id_type);
+                        }
+                    }
+                }
+            }
+            map
+        };
         Self {
             db,
             config,
             lock: Mutex::new(()),
+            collections: RwLock::new(collections),
         }
     }
 
@@ -60,6 +85,54 @@ impl Store {
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.docs", collection);
         Ok(self.db.keyspace(&name, fjall::KeyspaceCreateOptions::default)?)
+    }
+
+    fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
+        Ok(self.db.keyspace("_collections", fjall::KeyspaceCreateOptions::default)?)
+    }
+
+    fn validate_collection_exists(&self, collection: &str) -> Result<IdType, AppError> {
+        self.collections
+            .read()
+            .unwrap()
+            .get(collection)
+            .copied()
+            .ok_or_else(|| AppError::NotFound(format!("collection '{}' not found", collection)))
+    }
+
+    pub fn create_collection(&self, name: &str, id_type: &str) -> Result<CollectionCreated, AppError> {
+        let id_type_enum = match id_type {
+            "number" => IdType::Number,
+            "string" => IdType::String,
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "invalid id_type '{}', expected 'number' or 'string'",
+                    id_type
+                )))
+            }
+        };
+
+        let _lock = self.lock.lock().unwrap();
+
+        {
+            let mut map = self.collections.write().unwrap();
+            if map.contains_key(name) {
+                return Err(AppError::BadRequest(format!("collection '{}' already exists", name)));
+            }
+
+            let meta = self.meta_keyspace()?;
+            let value = bincode::serde::encode_to_vec(&id_type_enum, bincode::config::standard())?;
+            meta.insert(name.as_bytes(), &value)?;
+
+            map.insert(name.to_string(), id_type_enum);
+        }
+
+        self.db.persist(fjall::PersistMode::SyncData)?;
+
+        Ok(CollectionCreated {
+            name: name.to_string(),
+            id_type: id_type.to_string(),
+        })
     }
 
     fn normalize(word: &str, strip_punctuation: bool) -> String {
@@ -297,6 +370,19 @@ impl Store {
     }
 
     pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
+        let id_type = self.validate_collection_exists(collection)?;
+        match id_type {
+            IdType::Number => {
+                id.parse::<u64>().map_err(|_| {
+                    AppError::BadRequest(format!(
+                        "invalid id '{}': collection '{}' expects numeric ids",
+                        id, collection
+                    ))
+                })?;
+            }
+            IdType::String => {}
+        }
+
         let _lock = self.lock.lock().unwrap();
 
         let inverted = self.inverted_keyspace(collection)?;
@@ -336,6 +422,7 @@ impl Store {
         take: usize,
         after: Option<&str>,
     ) -> Result<Vec<String>, AppError> {
+        self.validate_collection_exists(collection)?;
         let inverted = self.inverted_keyspace(collection)?;
 
         let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
@@ -604,6 +691,7 @@ impl Store {
     }
 
     pub fn suggest(&self, collection: &str, prefix: &str) -> Result<Vec<String>, AppError> {
+        self.validate_collection_exists(collection)?;
         let inverted = self.inverted_keyspace(collection)?;
         let last_word = prefix.split_whitespace().last().unwrap_or(prefix);
         let normalized = Self::normalize(last_word, self.config.strip_punctuation);
@@ -623,6 +711,8 @@ impl Store {
     }
 
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
+        self.validate_collection_exists(collection)?;
+
         let _lock = self.lock.lock().unwrap();
 
         let inverted = self.inverted_keyspace(collection)?;
@@ -647,6 +737,7 @@ impl Store {
     }
 
     pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
+        let id_type = self.validate_collection_exists(collection)?;
         let inverted = self.inverted_keyspace(collection)?;
         let docs = self.docs_keyspace(collection)?;
 
@@ -660,13 +751,18 @@ impl Store {
 
         Ok(CollectionInfo {
             name: collection.to_string(),
+            id_type: format!("{:?}", id_type).to_lowercase(),
             document_count: docs.len()?,
             unique_terms,
         })
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
+        self.validate_collection_exists(collection)?;
+
         let _lock = self.lock.lock().unwrap();
+
+        self.collections.write().unwrap().remove(collection);
 
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
@@ -678,6 +774,9 @@ impl Store {
             let docs = self.db.keyspace(&docs_name, fjall::KeyspaceCreateOptions::default)?;
             self.db.delete_keyspace(docs)?;
         }
+
+        let meta = self.meta_keyspace()?;
+        meta.remove(collection.as_bytes())?;
 
         self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())

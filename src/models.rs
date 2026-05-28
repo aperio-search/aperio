@@ -35,9 +35,22 @@ pub struct StatusResponse {
     pub ok: bool,
 }
 
+#[derive(Deserialize)]
+pub struct CreateCollectionRequest {
+    pub name: String,
+    pub id_type: String,
+}
+
+#[derive(Serialize)]
+pub struct CollectionCreated {
+    pub name: String,
+    pub id_type: String,
+}
+
 #[derive(Serialize)]
 pub struct CollectionInfo {
     pub name: String,
+    pub id_type: String,
     pub document_count: usize,
     pub unique_terms: usize,
 }

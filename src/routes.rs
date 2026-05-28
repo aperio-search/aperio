@@ -7,8 +7,8 @@ use axum::{Json, Router};
 
 use crate::error::AppError;
 use crate::models::{
-    CollectionInfo, SearchParams, SearchResponse, StatusResponse, SuggestParams, SuggestResponse,
-    UpsertRequest,
+    CollectionCreated, CollectionInfo, CreateCollectionRequest, SearchParams, SearchResponse,
+    StatusResponse, SuggestParams, SuggestResponse, UpsertRequest,
 };
 use crate::store::Store;
 
@@ -19,6 +19,7 @@ pub struct AppState {
     fn router_with_state(state: Arc<AppState>) -> Router {
         Router::new()
             .route("/status", get(status))
+            .route("/collections", post(create_collection))
             .route("/collections/{collection}/items", post(upsert_item))
             .route("/collections/{collection}/search", get(search))
             .route("/collections/{collection}/suggest", get(suggest))
@@ -36,6 +37,14 @@ pub fn create_router(store: Store) -> Router {
 
 async fn status() -> Json<StatusResponse> {
     Json(StatusResponse { ok: true })
+}
+
+async fn create_collection(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateCollectionRequest>,
+) -> Result<(StatusCode, Json<CollectionCreated>), AppError> {
+    let created = state.store.create_collection(&body.name, &body.id_type)?;
+    Ok((StatusCode::CREATED, Json(created)))
 }
 
 async fn upsert_item(
