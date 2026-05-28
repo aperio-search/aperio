@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, RwLock};
 
+use roaring::RoaringTreemap;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
@@ -9,6 +10,7 @@ use crate::error::AppError;
 use crate::models::{CollectionCreated, CollectionInfo};
 
 const MAX_SHARD_SIZE: usize = 1000;
+const MAX_ROARING_SHARD_SIZE: u64 = 100_000;
 const SHARD_DELIM: char = '\0';
 
 #[derive(Clone)]
@@ -369,19 +371,177 @@ impl Store {
         Ok(())
     }
 
+    fn add_to_roaring_posting_list(
+        inverted: &fjall::Keyspace,
+        word: &str,
+        id: u64,
+    ) -> Result<(), AppError> {
+        let marker_key = word.as_bytes();
+        if inverted.get(marker_key)?.is_none() {
+            inverted.insert(marker_key, &[])?;
+        }
+
+        let indices = Self::list_shard_indices(inverted, word)?;
+
+        if indices.is_empty() {
+            let mut bitmap = RoaringTreemap::new();
+            bitmap.insert(id);
+            let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
+            inverted.insert(Self::shard_key(word, 0), &value)?;
+            return Ok(());
+        }
+
+        let last_idx = *indices.last().unwrap();
+        let last_key = Self::shard_key(word, last_idx);
+        let mut bitmap: RoaringTreemap = match inverted.get(&last_key)? {
+            Some(data) => {
+                bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                    .map(|(v, _)| v)?
+            }
+            None => RoaringTreemap::new(),
+        };
+
+        if bitmap.len() < MAX_ROARING_SHARD_SIZE {
+            bitmap.insert(id);
+            let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
+            inverted.insert(&last_key, &value)?;
+        } else {
+            let mut new_bitmap = RoaringTreemap::new();
+            new_bitmap.insert(id);
+            let value = bincode::serde::encode_to_vec(&new_bitmap, bincode::config::standard())?;
+            inverted.insert(Self::shard_key(word, last_idx + 1), &value)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove_from_roaring_posting_list(
+        inverted: &fjall::Keyspace,
+        word: &str,
+        id: u64,
+    ) -> Result<(), AppError> {
+        let indices = Self::list_shard_indices(inverted, word)?;
+        if indices.is_empty() {
+            return Ok(());
+        }
+
+        for &shard_idx in &indices {
+            let key = Self::shard_key(word, shard_idx);
+            let mut bitmap: RoaringTreemap = match inverted.get(&key)? {
+                Some(data) => {
+                    bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                        .map(|(v, _)| v)?
+                }
+                None => continue,
+            };
+            if !bitmap.contains(id) {
+                continue;
+            }
+            bitmap.remove(id);
+            if bitmap.is_empty() {
+                inverted.remove(&key)?;
+            } else {
+                let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
+                inverted.insert(&key, &value)?;
+            }
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    fn roaring_search(
+        &self,
+        collection: &str,
+        query: &str,
+        sort_desc: bool,
+        take: usize,
+        after: Option<&str>,
+    ) -> Result<Vec<String>, AppError> {
+        let inverted = self.inverted_keyspace(collection)?;
+
+        let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let any_empty = words.iter().any(|w| {
+            Self::list_shard_indices(&inverted, w)
+                .map(|idx| idx.is_empty())
+                .unwrap_or(true)
+        });
+        if any_empty {
+            return Ok(Vec::new());
+        }
+
+        let mut result: Option<RoaringTreemap> = None;
+        for word in &words {
+            let indices = Self::list_shard_indices(&inverted, word)?;
+            let mut word_bitmap = RoaringTreemap::new();
+            for &shard_idx in &indices {
+                let key = Self::shard_key(word, shard_idx);
+                if let Some(data) = inverted.get(&key)? {
+                    if let Ok((bitmap, _)) =
+                        bincode::serde::decode_from_slice::<RoaringTreemap, _>(
+                            &data,
+                            bincode::config::standard(),
+                        )
+                    {
+                        word_bitmap |= &bitmap;
+                    }
+                }
+            }
+            result = match result {
+                None => Some(word_bitmap),
+                Some(r) => Some(&r & &word_bitmap),
+            };
+        }
+
+        let bitmap = match result {
+            Some(b) => b,
+            None => return Ok(Vec::new()),
+        };
+
+        let after_val = after.and_then(|a| a.parse::<u64>().ok());
+        let mut ids: Vec<u64> = bitmap.into_iter().collect();
+        if sort_desc {
+            ids.sort_unstable_by(|a, b| b.cmp(a));
+        } else {
+            ids.sort_unstable();
+        }
+
+        let mut results: Vec<String> = Vec::with_capacity(take);
+        for id in ids {
+            if let Some(cursor) = after_val {
+                if sort_desc && id >= cursor {
+                    continue;
+                }
+                if !sort_desc && id <= cursor {
+                    continue;
+                }
+            }
+            results.push(id.to_string());
+            if results.len() >= take {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
     pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
         let id_type = self.validate_collection_exists(collection)?;
-        match id_type {
+        let id_u64 = match id_type {
             IdType::Number => {
-                id.parse::<u64>().map_err(|_| {
+                Some(id.parse::<u64>().map_err(|_| {
                     AppError::BadRequest(format!(
                         "invalid id '{}': collection '{}' expects numeric ids",
                         id, collection
                     ))
-                })?;
+                })?)
             }
-            IdType::String => {}
-        }
+            IdType::String => None,
+        };
 
         let _lock = self.lock.lock().unwrap();
 
@@ -396,12 +556,18 @@ impl Store {
                     .map(|(v, _)| v)?;
             let old_words: HashSet<String> = old_tokens.into_iter().collect();
             for word in old_words.difference(&new_words) {
-                Self::remove_from_posting_list(&inverted, word, id)?;
+                match id_type {
+                    IdType::Number => Self::remove_from_roaring_posting_list(&inverted, word, id_u64.unwrap())?,
+                    IdType::String => Self::remove_from_posting_list(&inverted, word, id)?,
+                }
             }
         }
 
         for word in &new_words {
-            Self::add_to_posting_list(&inverted, word, id)?;
+            match id_type {
+                IdType::Number => Self::add_to_roaring_posting_list(&inverted, word, id_u64.unwrap())?,
+                IdType::String => Self::add_to_posting_list(&inverted, word, id)?,
+            }
         }
 
         let tokens: Vec<String> = new_words.into_iter().collect();
@@ -422,7 +588,13 @@ impl Store {
         take: usize,
         after: Option<&str>,
     ) -> Result<Vec<String>, AppError> {
-        self.validate_collection_exists(collection)?;
+        let id_type = self.validate_collection_exists(collection)?;
+        match id_type {
+            IdType::Number => {
+                return self.roaring_search(collection, query, sort_desc, take, after);
+            }
+            IdType::String => {}
+        }
         let inverted = self.inverted_keyspace(collection)?;
 
         let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
@@ -711,7 +883,18 @@ impl Store {
     }
 
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
-        self.validate_collection_exists(collection)?;
+        let id_type = self.validate_collection_exists(collection)?;
+        let id_u64 = match id_type {
+            IdType::Number => {
+                Some(id.parse::<u64>().map_err(|_| {
+                    AppError::BadRequest(format!(
+                        "invalid id '{}': collection '{}' expects numeric ids",
+                        id, collection
+                    ))
+                })?)
+            }
+            IdType::String => None,
+        };
 
         let _lock = self.lock.lock().unwrap();
 
@@ -727,7 +910,10 @@ impl Store {
         };
 
         for word in &tokens {
-            Self::remove_from_posting_list(&inverted, word, id)?;
+            match id_type {
+                IdType::Number => Self::remove_from_roaring_posting_list(&inverted, word, id_u64.unwrap())?,
+                IdType::String => Self::remove_from_posting_list(&inverted, word, id)?,
+            }
         }
 
         docs.remove(id.as_bytes())?;
