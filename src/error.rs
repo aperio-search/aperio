@@ -30,8 +30,8 @@ impl From<bincode::error::EncodeError> for AppError {
     }
 }
 
-impl From<sled::Error> for AppError {
-    fn from(e: sled::Error) -> Self {
+impl From<fjall::Error> for AppError {
+    fn from(e: fjall::Error) -> Self {
         AppError::Internal(e.to_string())
     }
 }

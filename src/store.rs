@@ -1,7 +1,7 @@
 use std::collections::HashSet;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use sled::Db;
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
 
@@ -34,25 +34,32 @@ struct PostingShard {
 }
 
 pub struct Store {
-    db: Db,
+    db: fjall::Database,
     config: StoreConfig,
+    lock: Mutex<()>,
 }
 
 impl Store {
-    pub fn new(db: Db) -> Self {
+    pub fn new(db: fjall::Database) -> Self {
         Self::with_config(db, StoreConfig::default())
     }
 
-    pub fn with_config(db: Db, config: StoreConfig) -> Self {
-        Self { db, config }
+    pub fn with_config(db: fjall::Database, config: StoreConfig) -> Self {
+        Self {
+            db,
+            config,
+            lock: Mutex::new(()),
+        }
     }
 
-    fn inverted_tree(&self, collection: &str) -> Result<sled::Tree, AppError> {
-        Ok(self.db.open_tree(format!("{}:inverted", collection))?)
+    fn inverted_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
+        let name = format!("{}.inverted", collection);
+        Ok(self.db.keyspace(&name, fjall::KeyspaceCreateOptions::default)?)
     }
 
-    fn docs_tree(&self, collection: &str) -> Result<sled::Tree, AppError> {
-        Ok(self.db.open_tree(format!("{}:docs", collection))?)
+    fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
+        let name = format!("{}.docs", collection);
+        Ok(self.db.keyspace(&name, fjall::KeyspaceCreateOptions::default)?)
     }
 
     fn normalize(word: &str, strip_punctuation: bool) -> String {
@@ -79,20 +86,21 @@ impl Store {
     }
 
     fn load_posting_shard(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         shard: usize,
     ) -> Result<Option<PostingShard>, AppError> {
         let key = Self::shard_key(word, shard);
         match inverted.get(&key)? {
             Some(data) => {
-                let shard: PostingShard = bincode::serde::decode_from_slice(&data, bincode::config::standard()).map(|(v, _)| v).unwrap_or_else(|_| {
-                    PostingShard {
-                        first: String::new(),
-                        last: String::new(),
-                        ids: Vec::new(),
-                    }
-                });
+                let shard: PostingShard =
+                    bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                        .map(|(v, _)| v)
+                        .unwrap_or_else(|_| PostingShard {
+                            first: String::new(),
+                            last: String::new(),
+                            ids: Vec::new(),
+                        });
                 Ok(Some(shard))
             }
             None => Ok(None),
@@ -100,13 +108,13 @@ impl Store {
     }
 
     fn list_shard_indices(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
     ) -> Result<Vec<usize>, AppError> {
         let prefix = format!("{}{}", word, SHARD_DELIM).into_bytes();
         let mut indices: Vec<usize> = Vec::new();
-        for res in inverted.scan_prefix(&prefix) {
-            let (key, _) = res?;
+        for guard in inverted.prefix(&prefix) {
+            let (key, _) = guard.into_inner()?;
             let key_str = String::from_utf8_lossy(&key);
             if let Some(idx_str) = key_str.rsplit(SHARD_DELIM).next() {
                 if let Ok(idx) = idx_str.parse::<usize>() {
@@ -119,7 +127,7 @@ impl Store {
     }
 
     fn find_shard_for_id(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         id: &str,
         indices: &[usize],
@@ -161,189 +169,145 @@ impl Store {
     }
 
     fn add_to_posting_list(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         id: &str,
     ) -> Result<(), AppError> {
         let marker_key = word.as_bytes();
-        let _ = inverted.compare_and_swap(marker_key, None::<&[u8]>, Some(&[]));
+        if inverted.get(marker_key)?.is_none() {
+            inverted.insert(marker_key, &[])?;
+        }
 
-        'outer: loop {
-            let indices = Self::list_shard_indices(inverted, word)?;
+        let indices = Self::list_shard_indices(inverted, word)?;
 
-            if indices.is_empty() {
+        if indices.is_empty() {
+            let shard = PostingShard {
+                first: id.to_string(),
+                last: id.to_string(),
+                ids: vec![id.to_string()],
+            };
+            let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
+            inverted.insert(Self::shard_key(word, 0), &value)?;
+            return Ok(());
+        }
+
+        let last_idx = *indices.last().unwrap();
+        let last_shard = Self::load_posting_shard(inverted, word, last_idx)?.unwrap_or_else(
+            || PostingShard {
+                first: String::new(),
+                last: String::new(),
+                ids: Vec::new(),
+            },
+        );
+
+        if *id > *last_shard.last {
+            if last_shard.ids.len() < MAX_SHARD_SIZE {
+                if last_shard.ids.binary_search(&id.to_string()).is_ok() {
+                    return Ok(());
+                }
+                let mut new_shard = last_shard;
+                new_shard.ids.push(id.to_string());
+                new_shard.last = id.to_string();
+                let new_value =
+                    bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
+                inverted.insert(Self::shard_key(word, last_idx), &new_value)?;
+            } else {
                 let shard = PostingShard {
                     first: id.to_string(),
                     last: id.to_string(),
                     ids: vec![id.to_string()],
                 };
                 let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
-                let key = Self::shard_key(word, 0);
-                match inverted.compare_and_swap(
-                    &key,
-                    None::<&[u8]>,
-                    Some(value.as_slice()),
-                )? {
-                    Ok(()) => return Ok(()),
-                    Err(_) => continue 'outer,
-                }
+                inverted.insert(Self::shard_key(word, last_idx + 1), &value)?;
             }
-
-            let last_idx = *indices.last().unwrap();
-            let last_shard = match Self::load_posting_shard(inverted, word, last_idx)? {
-                Some(s) => s,
-                None => continue 'outer,
-            };
-
-            if *id > *last_shard.last {
-                if last_shard.ids.len() < MAX_SHARD_SIZE {
-                    if last_shard.ids.binary_search(&id.to_string()).is_ok() {
-                        return Ok(());
-                    }
-                    let mut new_shard = last_shard.clone();
-                    new_shard.ids.push(id.to_string());
-                    new_shard.last = id.to_string();
-                    let old_value = bincode::serde::encode_to_vec(&last_shard, bincode::config::standard())?;
-                    let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
-                    let key = Self::shard_key(word, last_idx);
-                    match inverted.compare_and_swap(
-                        &key,
-                        Some(old_value.as_slice()),
-                        Some(new_value),
-                    )? {
-                        Ok(()) => return Ok(()),
-                        Err(_) => continue 'outer,
-                    }
-                } else {
-                    let new_idx = last_idx + 1;
-                    let shard = PostingShard {
-                        first: id.to_string(),
-                        last: id.to_string(),
-                        ids: vec![id.to_string()],
-                    };
-                    let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
-                    let key = Self::shard_key(word, new_idx);
-                    match inverted.compare_and_swap(
-                        &key,
-                        None::<&[u8]>,
-                        Some(value.as_slice()),
-                    )? {
-                        Ok(()) => return Ok(()),
-                        Err(_) => continue 'outer,
-                    }
-                }
-            }
-
-            let target = Self::find_shard_for_id(inverted, word, id, &indices)?;
-
-            'inner: loop {
-                let current = match Self::load_posting_shard(inverted, word, target)? {
-                    Some(s) => s,
-                    None => continue 'outer,
-                };
-                if current.ids.binary_search(&id.to_string()).is_ok() {
-                    return Ok(());
-                }
-                if *id < *current.first || *id > *current.last {
-                    continue 'outer;
-                }
-
-                let pos = current
-                    .ids
-                    .binary_search(&id.to_string())
-                    .unwrap_err();
-                let mut new_shard = current.clone();
-                new_shard.ids.insert(pos, id.to_string());
-                if pos == 0 {
-                    new_shard.first = id.to_string();
-                }
-                if pos == new_shard.ids.len() - 1 {
-                    new_shard.last = id.to_string();
-                }
-
-                let old_value = bincode::serde::encode_to_vec(&current, bincode::config::standard())?;
-                let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
-                let key = Self::shard_key(word, target);
-                match inverted.compare_and_swap(
-                    &key,
-                    Some(old_value.as_slice()),
-                    Some(new_value),
-                )? {
-                    Ok(()) => return Ok(()),
-                    Err(_) => continue 'inner,
-                }
-            }
+            return Ok(());
         }
+
+        let target = Self::find_shard_for_id(inverted, word, id, &indices)?;
+        let current = Self::load_posting_shard(inverted, word, target)?.unwrap_or_else(
+            || PostingShard {
+                first: String::new(),
+                last: String::new(),
+                ids: Vec::new(),
+            },
+        );
+
+        if current.ids.binary_search(&id.to_string()).is_ok() {
+            return Ok(());
+        }
+
+        let pos = current.ids.binary_search(&id.to_string()).unwrap_err();
+        let mut new_shard = current;
+        new_shard.ids.insert(pos, id.to_string());
+        if pos == 0 {
+            new_shard.first = id.to_string();
+        }
+        if pos == new_shard.ids.len() - 1 {
+            new_shard.last = id.to_string();
+        }
+
+        let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
+        inverted.insert(Self::shard_key(word, target), &new_value)?;
+
+        Ok(())
     }
 
     fn remove_from_posting_list(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         id: &str,
     ) -> Result<(), AppError> {
-        'outer: loop {
-            let indices = Self::list_shard_indices(inverted, word)?;
-            if indices.is_empty() {
-                return Ok(());
-            }
-
-            let target = Self::find_shard_for_id(inverted, word, id, &indices)?;
-            let current = match Self::load_posting_shard(inverted, word, target)? {
-                Some(s) => s,
-                None => continue 'outer,
-            };
-
-            let pos = match current.ids.binary_search(&id.to_string()) {
-                Ok(p) => p,
-                Err(_) => return Ok(()),
-            };
-
-            let ran_first = pos == 0;
-            let ran_last = pos == current.ids.len() - 1;
-            let mut new_shard = current.clone();
-            new_shard.ids.remove(pos);
-
-            if new_shard.ids.is_empty() {
-                let old_value = bincode::serde::encode_to_vec(&current, bincode::config::standard())?;
-                let key = Self::shard_key(word, target);
-                match inverted.compare_and_swap(
-                    &key,
-                    Some(old_value.as_slice()),
-                    None::<Vec<u8>>,
-                )? {
-                    Ok(()) => return Ok(()),
-                    Err(_) => continue 'outer,
-                }
-            } else {
-                if ran_first {
-                    new_shard.first = new_shard.ids[0].clone();
-                }
-                if ran_last {
-                    new_shard.last = new_shard.ids.last().unwrap().clone();
-                }
-                let old_value = bincode::serde::encode_to_vec(&current, bincode::config::standard())?;
-                let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
-                let key = Self::shard_key(word, target);
-                match inverted.compare_and_swap(
-                    &key,
-                    Some(old_value.as_slice()),
-                    Some(new_value),
-                )? {
-                    Ok(()) => return Ok(()),
-                    Err(_) => continue 'outer,
-                }
-            }
+        let indices = Self::list_shard_indices(inverted, word)?;
+        if indices.is_empty() {
+            return Ok(());
         }
+
+        let target = Self::find_shard_for_id(inverted, word, id, &indices)?;
+        let current = match Self::load_posting_shard(inverted, word, target)? {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        let pos = match current.ids.binary_search(&id.to_string()) {
+            Ok(p) => p,
+            Err(_) => return Ok(()),
+        };
+
+        let ran_first = pos == 0;
+        let ran_last = pos == current.ids.len() - 1;
+        let mut new_shard = current;
+        new_shard.ids.remove(pos);
+
+        let key = Self::shard_key(word, target);
+        if new_shard.ids.is_empty() {
+            inverted.remove(&key)?;
+        } else {
+            if ran_first {
+                new_shard.first = new_shard.ids[0].clone();
+            }
+            if ran_last {
+                new_shard.last = new_shard.ids.last().unwrap().clone();
+            }
+            let new_value =
+                bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
+            inverted.insert(&key, &new_value)?;
+        }
+
+        Ok(())
     }
 
     pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
-        let inverted = self.inverted_tree(collection)?;
-        let docs = self.docs_tree(collection)?;
+        let _lock = self.lock.lock().unwrap();
+
+        let inverted = self.inverted_keyspace(collection)?;
+        let docs = self.docs_keyspace(collection)?;
 
         let new_words = Self::tokenize(content, &self.config);
 
         if let Some(old_data) = docs.get(id.as_bytes())? {
-            let old_tokens: Vec<String> = bincode::serde::decode_from_slice(&old_data, bincode::config::standard()).map(|(v, _)| v)?;
+            let old_tokens: Vec<String> =
+                bincode::serde::decode_from_slice(&old_data, bincode::config::standard())
+                    .map(|(v, _)| v)?;
             let old_words: HashSet<String> = old_tokens.into_iter().collect();
             for word in old_words.difference(&new_words) {
                 Self::remove_from_posting_list(&inverted, word, id)?;
@@ -360,6 +324,7 @@ impl Store {
             bincode::serde::encode_to_vec(&tokens, bincode::config::standard())?,
         )?;
 
+        self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())
     }
 
@@ -371,7 +336,7 @@ impl Store {
         take: usize,
         after: Option<&str>,
     ) -> Result<Vec<String>, AppError> {
-        let inverted = self.inverted_tree(collection)?;
+        let inverted = self.inverted_keyspace(collection)?;
 
         let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
         if words.is_empty() {
@@ -401,13 +366,7 @@ impl Store {
 
         if let Some(cursor) = after {
             for (i, word) in words.iter().enumerate() {
-                Self::skip_past_cursor(
-                    &inverted,
-                    word,
-                    cursor,
-                    &mut iters[i],
-                    sort_desc,
-                )?;
+                Self::skip_past_cursor(&inverted, word, cursor, &mut iters[i], sort_desc)?;
             }
         }
 
@@ -463,12 +422,7 @@ impl Store {
                                 cmp == std::cmp::Ordering::Less
                             };
                             if should_advance {
-                                Self::advance_iter(
-                                    &inverted,
-                                    &words[i],
-                                    state,
-                                    sort_desc,
-                                )?;
+                                Self::advance_iter(&inverted, &words[i], state, sort_desc)?;
                             } else {
                                 if id != pivot.as_str() {
                                     all_have = false;
@@ -489,12 +443,7 @@ impl Store {
                     break;
                 }
                 for (i, state) in iters.iter_mut().enumerate() {
-                    Self::advance_iter(
-                        &inverted,
-                        &words[i],
-                        state,
-                        sort_desc,
-                    )?;
+                    Self::advance_iter(&inverted, &words[i], state, sort_desc)?;
                 }
             }
         }
@@ -503,7 +452,7 @@ impl Store {
     }
 
     fn load_first_shard(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         state: &mut WordIterState,
     ) -> Result<(), AppError> {
@@ -526,7 +475,7 @@ impl Store {
     }
 
     fn load_last_shard(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         state: &mut WordIterState,
     ) -> Result<(), AppError> {
@@ -549,7 +498,7 @@ impl Store {
     }
 
     fn advance_iter(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         state: &mut WordIterState,
         desc: bool,
@@ -602,7 +551,7 @@ impl Store {
     }
 
     fn skip_past_cursor(
-        inverted: &sled::Tree,
+        inverted: &fjall::Keyspace,
         word: &str,
         cursor: &str,
         state: &mut WordIterState,
@@ -641,11 +590,7 @@ impl Store {
             match cur {
                 None => break,
                 Some(id) => {
-                    let should_skip = if desc {
-                        id >= cursor
-                    } else {
-                        id <= cursor
-                    };
+                    let should_skip = if desc { id >= cursor } else { id <= cursor };
                     if should_skip {
                         Self::advance_iter(inverted, word, state, desc)?;
                     } else {
@@ -659,14 +604,14 @@ impl Store {
     }
 
     pub fn suggest(&self, collection: &str, prefix: &str) -> Result<Vec<String>, AppError> {
-        let inverted = self.inverted_tree(collection)?;
+        let inverted = self.inverted_keyspace(collection)?;
         let last_word = prefix.split_whitespace().last().unwrap_or(prefix);
         let normalized = Self::normalize(last_word, self.config.strip_punctuation);
         let mut seen = HashSet::new();
         let results: Vec<String> = inverted
-            .scan_prefix(normalized.as_bytes())
+            .prefix(normalized.as_bytes())
             .take(50)
-            .filter_map(|res| res.ok())
+            .filter_map(|guard| guard.into_inner().ok())
             .map(|(key, _)| {
                 let s = String::from_utf8(key.to_vec()).unwrap_or_default();
                 s.split(SHARD_DELIM).next().unwrap_or(&s).to_string()
@@ -678,11 +623,16 @@ impl Store {
     }
 
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
-        let inverted = self.inverted_tree(collection)?;
-        let docs = self.docs_tree(collection)?;
+        let _lock = self.lock.lock().unwrap();
+
+        let inverted = self.inverted_keyspace(collection)?;
+        let docs = self.docs_keyspace(collection)?;
 
         let tokens: Vec<String> = match docs.get(id.as_bytes())? {
-            Some(data) => bincode::serde::decode_from_slice(&data, bincode::config::standard()).map(|(v, _)| v)?,
+            Some(data) => {
+                bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                    .map(|(v, _)| v)?
+            }
             None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
         };
 
@@ -692,16 +642,17 @@ impl Store {
 
         docs.remove(id.as_bytes())?;
 
+        self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())
     }
 
     pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
-        let inverted = self.inverted_tree(collection)?;
-        let docs = self.docs_tree(collection)?;
+        let inverted = self.inverted_keyspace(collection)?;
+        let docs = self.docs_keyspace(collection)?;
 
         let mut unique_terms = 0usize;
-        for res in inverted.iter() {
-            let (key, value) = res?;
+        for guard in inverted.iter() {
+            let (key, value) = guard.into_inner()?;
             if !key.contains(&(SHARD_DELIM as u8)) && value.is_empty() {
                 unique_terms += 1;
             }
@@ -709,14 +660,26 @@ impl Store {
 
         Ok(CollectionInfo {
             name: collection.to_string(),
-            document_count: docs.len(),
+            document_count: docs.len()?,
             unique_terms,
         })
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
-        self.db.drop_tree(format!("{}:inverted", collection))?;
-        self.db.drop_tree(format!("{}:docs", collection))?;
+        let _lock = self.lock.lock().unwrap();
+
+        let inv_name = format!("{}.inverted", collection);
+        if self.db.keyspace_exists(&inv_name) {
+            let inv = self.db.keyspace(&inv_name, fjall::KeyspaceCreateOptions::default)?;
+            self.db.delete_keyspace(inv)?;
+        }
+        let docs_name = format!("{}.docs", collection);
+        if self.db.keyspace_exists(&docs_name) {
+            let docs = self.db.keyspace(&docs_name, fjall::KeyspaceCreateOptions::default)?;
+            self.db.delete_keyspace(docs)?;
+        }
+
+        self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())
     }
 }
