@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, RwLock};
 
 use roaring::RoaringTreemap;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
@@ -10,6 +11,31 @@ use crate::error::AppError;
 use crate::models::{CollectionCreated, CollectionInfo};
 
 const SHARD_DELIM: char = '\0';
+
+macro_rules! encode_rkyv {
+    ($value:expr) => {{
+        let result: Result<Vec<u8>, AppError> = rkyv::to_bytes::<rkyv::rancor::Error>($value)
+            .map(|av| av.to_vec())
+            .map_err(|e| AppError::Internal(e.to_string()));
+        result
+    }};
+}
+
+macro_rules! decode_rkyv {
+    ($ty:ty, $bytes:expr) => {{
+        let result: Result<$ty, AppError> = rkyv::from_bytes::<$ty, rkyv::rancor::Error>($bytes)
+            .map_err(|e| AppError::Internal(e.to_string()));
+        result
+    }};
+}
+
+fn roaring_to_vec(b: &RoaringTreemap) -> Result<Vec<u8>, AppError> {
+    Ok(serde_json::to_vec(b)?)
+}
+
+fn roaring_from_slice(bytes: &[u8]) -> Result<RoaringTreemap, AppError> {
+    Ok(serde_json::from_slice(bytes)?)
+}
 
 #[derive(Clone)]
 pub struct StoreConfig {
@@ -30,14 +56,14 @@ impl Default for StoreConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IdType {
     Number,
     String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
 struct PostingShard {
     first: String,
     last: String,
@@ -63,8 +89,8 @@ impl Store {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
                         let name = String::from_utf8_lossy(&key).to_string();
-                        if let Ok((id_type, _)) =
-                            bincode::serde::decode_from_slice(&value, bincode::config::standard())
+                        if let Ok(id_type) =
+                            decode_rkyv!(IdType, &value)
                         {
                             map.insert(name, id_type);
                         }
@@ -125,7 +151,7 @@ impl Store {
             }
 
             let meta = self.meta_keyspace()?;
-            let value = bincode::serde::encode_to_vec(&id_type_enum, bincode::config::standard())?;
+            let value = encode_rkyv!(&id_type_enum)?;
             meta.insert(name.as_bytes(), &value)?;
 
             map.insert(name.to_string(), id_type_enum);
@@ -170,14 +196,12 @@ impl Store {
         let key = Self::shard_key(word, shard);
         match inverted.get(&key)? {
             Some(data) => {
-                let shard: PostingShard =
-                    bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                        .map(|(v, _)| v)
-                        .unwrap_or_else(|_| PostingShard {
-                            first: String::new(),
-                            last: String::new(),
-                            ids: Vec::new(),
-                        });
+                let shard: PostingShard = decode_rkyv!(PostingShard, &data)
+                    .unwrap_or_else(|_| PostingShard {
+                        first: String::new(),
+                        last: String::new(),
+                        ids: Vec::new(),
+                    });
                 Ok(Some(shard))
             }
             None => Ok(None),
@@ -264,7 +288,7 @@ impl Store {
                 last: id.to_string(),
                 ids: vec![id.to_string()],
             };
-            let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
+            let value = encode_rkyv!(&shard)?;
             inverted.insert(Self::shard_key(word, 0), &value)?;
             return Ok(());
         }
@@ -286,8 +310,7 @@ impl Store {
                 let mut new_shard = last_shard;
                 new_shard.ids.push(id.to_string());
                 new_shard.last = id.to_string();
-                let new_value =
-                    bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
+                let new_value = encode_rkyv!(&new_shard)?;
                 inverted.insert(Self::shard_key(word, last_idx), &new_value)?;
             } else {
                 let shard = PostingShard {
@@ -295,7 +318,7 @@ impl Store {
                     last: id.to_string(),
                     ids: vec![id.to_string()],
                 };
-                let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
+                let value = encode_rkyv!(&shard)?;
                 inverted.insert(Self::shard_key(word, last_idx + 1), &value)?;
             }
             return Ok(());
@@ -324,7 +347,7 @@ impl Store {
             new_shard.last = id.to_string();
         }
 
-        let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
+        let new_value = encode_rkyv!(&new_shard)?;
         inverted.insert(Self::shard_key(word, target), &new_value)?;
 
         Ok(())
@@ -366,8 +389,7 @@ impl Store {
             if ran_last {
                 new_shard.last = new_shard.ids.last().unwrap().clone();
             }
-            let new_value =
-                bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
+            let new_value = encode_rkyv!(&new_shard)?;
             inverted.insert(&key, &new_value)?;
         }
 
@@ -390,7 +412,7 @@ impl Store {
         if indices.is_empty() {
             let mut bitmap = RoaringTreemap::new();
             bitmap.insert(id);
-            let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
+            let value = roaring_to_vec(&bitmap)?;
             inverted.insert(Self::shard_key(word, 0), &value)?;
             return Ok(());
         }
@@ -398,21 +420,18 @@ impl Store {
         let last_idx = *indices.last().unwrap();
         let last_key = Self::shard_key(word, last_idx);
         let mut bitmap: RoaringTreemap = match inverted.get(&last_key)? {
-            Some(data) => {
-                bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                    .map(|(v, _)| v)?
-            }
+            Some(data) => roaring_from_slice(&data)?,
             None => RoaringTreemap::new(),
         };
 
         if bitmap.len() < max_roaring_shard_size {
             bitmap.insert(id);
-            let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
+            let value = roaring_to_vec(&bitmap)?;
             inverted.insert(&last_key, &value)?;
         } else {
             let mut new_bitmap = RoaringTreemap::new();
             new_bitmap.insert(id);
-            let value = bincode::serde::encode_to_vec(&new_bitmap, bincode::config::standard())?;
+            let value = roaring_to_vec(&new_bitmap)?;
             inverted.insert(Self::shard_key(word, last_idx + 1), &value)?;
         }
 
@@ -432,10 +451,7 @@ impl Store {
         for &shard_idx in &indices {
             let key = Self::shard_key(word, shard_idx);
             let mut bitmap: RoaringTreemap = match inverted.get(&key)? {
-                Some(data) => {
-                    bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                        .map(|(v, _)| v)?
-                }
+                Some(data) => roaring_from_slice(&data)?,
                 None => continue,
             };
             if !bitmap.contains(id) {
@@ -445,7 +461,7 @@ impl Store {
             if bitmap.is_empty() {
                 inverted.remove(&key)?;
             } else {
-                let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
+                let value = roaring_to_vec(&bitmap)?;
                 inverted.insert(&key, &value)?;
             }
             return Ok(());
@@ -485,11 +501,7 @@ impl Store {
             for &shard_idx in &indices {
                 let key = Self::shard_key(word, shard_idx);
                 if let Some(data) = inverted.get(&key)? {
-                    if let Ok((bitmap, _)) =
-                        bincode::serde::decode_from_slice::<RoaringTreemap, _>(
-                            &data,
-                            bincode::config::standard(),
-                        )
+                    if let Ok(bitmap) = roaring_from_slice(&data)
                     {
                         word_bitmap |= &bitmap;
                     }
@@ -555,9 +567,7 @@ impl Store {
         let new_words = Self::tokenize(content, &self.config);
 
         if let Some(old_data) = docs.get(id.as_bytes())? {
-            let old_tokens: Vec<String> =
-                bincode::serde::decode_from_slice(&old_data, bincode::config::standard())
-                    .map(|(v, _)| v)?;
+            let old_tokens: Vec<String> = decode_rkyv!(Vec<String>, &old_data)?;
             let old_words: HashSet<String> = old_tokens.into_iter().collect();
             for word in old_words.difference(&new_words) {
                 match id_type {
@@ -577,7 +587,7 @@ impl Store {
         let tokens: Vec<String> = new_words.into_iter().collect();
         docs.insert(
             id.as_bytes(),
-            bincode::serde::encode_to_vec(&tokens, bincode::config::standard())?,
+            encode_rkyv!(&tokens)?,
         )?;
 
         self.db.persist(fjall::PersistMode::SyncData)?;
@@ -907,8 +917,7 @@ impl Store {
 
         let tokens: Vec<String> = match docs.get(id.as_bytes())? {
             Some(data) => {
-                bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                    .map(|(v, _)| v)?
+                decode_rkyv!(Vec<String>, &data)?
             }
             None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
         };

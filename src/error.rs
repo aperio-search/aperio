@@ -20,20 +20,14 @@ impl IntoResponse for AppError {
     }
 }
 
-impl From<bincode::error::DecodeError> for AppError {
-    fn from(e: bincode::error::DecodeError) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
-impl From<bincode::error::EncodeError> for AppError {
-    fn from(e: bincode::error::EncodeError) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
 impl From<fjall::Error> for AppError {
     fn from(e: fjall::Error) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
         AppError::Internal(e.to_string())
     }
 }
