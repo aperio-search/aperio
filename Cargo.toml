@@ -8,5 +8,6 @@ axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+bincode = { version = "2", features = ["serde"] }
 sled = "0.34"
 unicode-normalization = "0.1"

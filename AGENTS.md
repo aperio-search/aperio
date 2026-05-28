@@ -56,7 +56,7 @@ Each collection uses two sled trees: `{collection}:inverted` (word→[doc IDs]) 
 
 ```sh
 docker build -t aster .
-docker run -e DATA_DIR=/data -p 3000:3000 aster
+docker run -v $(pwd)/data:/data -e DATA_DIR=/data -p 3000:3000 aster
 ```
 
 `Dockerfile` uses `rust:1.95-slim-bookworm` to build, `debian:bookworm-slim` at runtime. Binary lives at `/aster`.

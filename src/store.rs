@@ -86,7 +86,7 @@ impl Store {
         let key = Self::shard_key(word, shard);
         match inverted.get(&key)? {
             Some(data) => {
-                let shard: PostingShard = serde_json::from_slice(&data).unwrap_or_else(|_| {
+                let shard: PostingShard = bincode::serde::decode_from_slice(&data, bincode::config::standard()).map(|(v, _)| v).unwrap_or_else(|_| {
                     PostingShard {
                         first: String::new(),
                         last: String::new(),
@@ -177,8 +177,7 @@ impl Store {
                     last: id.to_string(),
                     ids: vec![id.to_string()],
                 };
-                let value = serde_json::to_vec(&shard)
-                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
                 let key = Self::shard_key(word, 0);
                 match inverted.compare_and_swap(
                     &key,
@@ -204,10 +203,8 @@ impl Store {
                     let mut new_shard = last_shard.clone();
                     new_shard.ids.push(id.to_string());
                     new_shard.last = id.to_string();
-                    let old_value = serde_json::to_vec(&last_shard)
-                        .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
-                    let new_value = serde_json::to_vec(&new_shard)
-                        .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                    let old_value = bincode::serde::encode_to_vec(&last_shard, bincode::config::standard())?;
+                    let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
                     let key = Self::shard_key(word, last_idx);
                     match inverted.compare_and_swap(
                         &key,
@@ -224,8 +221,7 @@ impl Store {
                         last: id.to_string(),
                         ids: vec![id.to_string()],
                     };
-                    let value = serde_json::to_vec(&shard)
-                        .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                    let value = bincode::serde::encode_to_vec(&shard, bincode::config::standard())?;
                     let key = Self::shard_key(word, new_idx);
                     match inverted.compare_and_swap(
                         &key,
@@ -265,10 +261,8 @@ impl Store {
                     new_shard.last = id.to_string();
                 }
 
-                let old_value = serde_json::to_vec(&current)
-                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
-                let new_value = serde_json::to_vec(&new_shard)
-                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                let old_value = bincode::serde::encode_to_vec(&current, bincode::config::standard())?;
+                let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
                 let key = Self::shard_key(word, target);
                 match inverted.compare_and_swap(
                     &key,
@@ -310,8 +304,7 @@ impl Store {
             new_shard.ids.remove(pos);
 
             if new_shard.ids.is_empty() {
-                let old_value = serde_json::to_vec(&current)
-                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                let old_value = bincode::serde::encode_to_vec(&current, bincode::config::standard())?;
                 let key = Self::shard_key(word, target);
                 match inverted.compare_and_swap(
                     &key,
@@ -328,10 +321,8 @@ impl Store {
                 if ran_last {
                     new_shard.last = new_shard.ids.last().unwrap().clone();
                 }
-                let old_value = serde_json::to_vec(&current)
-                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
-                let new_value = serde_json::to_vec(&new_shard)
-                    .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?;
+                let old_value = bincode::serde::encode_to_vec(&current, bincode::config::standard())?;
+                let new_value = bincode::serde::encode_to_vec(&new_shard, bincode::config::standard())?;
                 let key = Self::shard_key(word, target);
                 match inverted.compare_and_swap(
                     &key,
@@ -352,8 +343,7 @@ impl Store {
         let new_words = Self::tokenize(content, &self.config);
 
         if let Some(old_data) = docs.get(id.as_bytes())? {
-            let old_tokens: Vec<String> = serde_json::from_slice(&old_data)
-                .map_err(|e| AppError::Internal(format!("deserialize error: {}", e)))?;
+            let old_tokens: Vec<String> = bincode::serde::decode_from_slice(&old_data, bincode::config::standard()).map(|(v, _)| v)?;
             let old_words: HashSet<String> = old_tokens.into_iter().collect();
             for word in old_words.difference(&new_words) {
                 Self::remove_from_posting_list(&inverted, word, id)?;
@@ -367,8 +357,7 @@ impl Store {
         let tokens: Vec<String> = new_words.into_iter().collect();
         docs.insert(
             id.as_bytes(),
-            serde_json::to_vec(&tokens)
-                .map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?,
+            bincode::serde::encode_to_vec(&tokens, bincode::config::standard())?,
         )?;
 
         Ok(())
@@ -693,8 +682,7 @@ impl Store {
         let docs = self.docs_tree(collection)?;
 
         let tokens: Vec<String> = match docs.get(id.as_bytes())? {
-            Some(data) => serde_json::from_slice(&data)
-                .map_err(|e| AppError::Internal(format!("deserialize error: {}", e)))?,
+            Some(data) => bincode::serde::decode_from_slice(&data, bincode::config::standard()).map(|(v, _)| v)?,
             None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
         };
 

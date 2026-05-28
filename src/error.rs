@@ -18,6 +18,18 @@ impl IntoResponse for AppError {
     }
 }
 
+impl From<bincode::error::DecodeError> for AppError {
+    fn from(e: bincode::error::DecodeError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<bincode::error::EncodeError> for AppError {
+    fn from(e: bincode::error::EncodeError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
 impl From<sled::Error> for AppError {
     fn from(e: sled::Error) -> Self {
         AppError::Internal(e.to_string())
