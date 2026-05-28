@@ -4,8 +4,7 @@ use std::sync::{Mutex, RwLock};
 use roaring::RoaringTreemap;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
-use unicode_normalization::char::is_combining_mark;
-use unicode_normalization::UnicodeNormalization;
+use charabia::Tokenize;
 
 use crate::error::AppError;
 use crate::models::{CollectionCreated, CollectionInfo};
@@ -42,7 +41,6 @@ pub struct StoreConfig {
     pub min_token_length: usize,
     pub max_shard_size: usize,
     pub max_roaring_shard_size: u64,
-    pub strip_punctuation: bool,
 }
 
 impl Default for StoreConfig {
@@ -51,7 +49,6 @@ impl Default for StoreConfig {
             min_token_length: 2,
             max_shard_size: 1000,
             max_roaring_shard_size: 100_000,
-            strip_punctuation: true,
         }
     }
 }
@@ -165,21 +162,11 @@ impl Store {
         })
     }
 
-    fn normalize(word: &str, strip_punctuation: bool) -> String {
-        word.nfkd()
-            .filter(|c| !is_combining_mark(*c))
-            .collect::<String>()
-            .to_lowercase()
-            .chars()
-            .filter(|c| !strip_punctuation || c.is_alphanumeric())
-            .collect()
-    }
-
     fn tokenize(content: &str, config: &StoreConfig) -> HashSet<String> {
         content
-            .split_whitespace()
-            .filter(|w| !w.is_empty())
-            .map(|w| Self::normalize(w, config.strip_punctuation))
+            .tokenize()
+            .filter(|t| t.is_word())
+            .map(|t| t.lemma().to_string())
             .filter(|w| w.len() >= config.min_token_length)
             .collect()
     }
@@ -880,7 +867,11 @@ impl Store {
         self.validate_collection_exists(collection)?;
         let inverted = self.inverted_keyspace(collection)?;
         let last_word = prefix.split_whitespace().last().unwrap_or(prefix);
-        let normalized = Self::normalize(last_word, self.config.strip_punctuation);
+        let normalized = last_word
+            .tokenize()
+            .find(|t| t.is_word())
+            .map(|t| t.lemma().to_string())
+            .unwrap_or_else(|| last_word.to_lowercase());
         let mut seen = HashSet::new();
         let results: Vec<String> = inverted
             .prefix(normalized.as_bytes())

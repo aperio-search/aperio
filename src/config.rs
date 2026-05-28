@@ -38,7 +38,6 @@ impl AppConfig {
             min_token_length: self.min_token_length.unwrap_or(2),
             max_shard_size: self.max_shard_size.unwrap_or(1000),
             max_roaring_shard_size: self.max_roaring_shard_size.unwrap_or(100_000),
-            strip_punctuation: true,
         }
     }
 }
