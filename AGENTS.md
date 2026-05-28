@@ -4,9 +4,10 @@
 
 Single Rust binary (`edition 2024`), no workspace, no tests yet. Server starts on port **3000**, data dir defaults to `./data` (overridable via `DATA_DIR` env var). Database file is `{DATA_DIR}/aster.db`.
 
-- `src/main.rs` — entrypoint; opens sled DB, creates `Store`, binds `0.0.0.0:3000`
-- `src/store.rs` — core indexing logic; uses CAS (`compare_and_swap`) for lock-free concurrent upsert/delete
-- `src/routes.rs` — axum router with 5 endpoints + fallback
+- `src/main.rs` — entrypoint; opens fjall DB, creates `Store`, binds `0.0.0.0:3000`
+- `src/store.rs` — core indexing logic; posting-list sharding with configurable shard sizes
+- `src/config.rs` — optional TOML config file loader (`CONFIG_FILE` env var)
+- `src/routes.rs` — axum router with 6 endpoints + fallback
 - `src/error.rs` — custom `AppError` → JSON error responses
 - `src/models.rs` — request/response structs
 
@@ -15,9 +16,11 @@ Single Rust binary (`edition 2024`), no workspace, no tests yet. Server starts o
 | Crate | Purpose |
 |---|---|
 | `axum 0.8` | HTTP framework |
-| `sled 0.34` | Embedded KV store (disk-backed) |
+| `fjall 3.1` | Embedded KV store (disk-backed, LSM-tree) |
+| `roaring 0.11` | Compressed bitmap for numeric-id posting lists |
 | `unicode-normalization 0.1` | NFKD + combining-mark stripping |
 | `serde / serde_json` | JSON wire format for API & posting lists |
+| `toml 0.8` | Config file parsing |
 
 ## Commands
 
@@ -45,18 +48,21 @@ There are **no tests** (`cargo test` produces nothing). No linter/formatter conf
 - Search is **AND-only** (multiple terms, all must match). No OR, no filtering.
 - Sort is by **document ID lexicographic order**, default `DESC`. Use ULID/UUIDv7/zero-padded IDs for predictable ordering.
 - Cursor pagination: `after` is exclusive — in `desc` mode filters IDs < cursor, in `asc` mode filters IDs > cursor. `take` clamped 1–100.
-- Suggest returns up to **10 prefix matches** from the inverted index (uses `sled::Tree::scan_prefix`).
-- Tokenization: NFKD normalize → strip combining marks → lowercase → strip non-alphanumeric (configurable via `StoreConfig::strip_punctuation`) → filter tokens shorter than `min_token_length` (default 2).
+- Suggest returns up to **10 prefix matches** from the inverted index (uses `fjall::Keyspace::prefix`).
+- Tokenization: NFKD normalize → strip combining marks → lowercase → strip non-alphanumeric (configurable via `StoreConfig::strip_punctuation`) → filter tokens shorter than `min_token_length` (default 2, configurable via config file).
 
 ## Storage layout
 
-Each collection uses two sled trees: `{collection}:inverted` (word→[doc IDs]) and `{collection}:docs` (doc ID→[tokens] — JSON array of normalized tokens). See `store.rs:39-45`.
+Each collection uses two fjall keyspaces: `{collection}:inverted` (word→[doc IDs]) and `{collection}:docs` (doc ID→[tokens] — JSON array of normalized tokens). See `store.rs:39-45`.
 
 ## Docker
 
 ```sh
 docker build -t aster .
 docker run -v $(pwd)/data:/data -e DATA_DIR=/data -p 3000:3000 aster
+
+# With custom config:
+docker run -v $(pwd)/data:/data -v $(pwd)/config.toml:/data/config.toml -e DATA_DIR=/data -p 3000:3000 aster
 ```
 
 `Dockerfile` uses `rust:1.95-slim-bookworm` to build, `debian:bookworm-slim` at runtime. Binary lives at `/aster`.
@@ -64,5 +70,15 @@ docker run -v $(pwd)/data:/data -e DATA_DIR=/data -p 3000:3000 aster
 ## Style notes
 
 - No comments in code — match that convention when editing.
-- `AppError` converts `sled::Error` to `Internal` automatically (`error.rs:22`).
+- `AppError` converts `fjall::Error` to `Internal` automatically (`error.rs:22`).
 - All endpoints return JSON errors with shape `{ "error": "..." }`.
+
+## Config file
+
+Optional TOML file at `CONFIG_FILE` env var path (default not loaded). Fields:
+
+```toml
+min_token_length = 2           # minimum length of indexed tokens
+max_shard_size = 1000          # max doc IDs per string posting-list shard
+max_roaring_shard_size = 100000 # max doc IDs per roaring bitmap shard
+```

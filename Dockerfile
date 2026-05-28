@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /aster /aster
 
 ENV DATA_DIR=/data
+ENV CONFIG_FILE=/data/config.toml
 VOLUME /data
 
 EXPOSE 3000

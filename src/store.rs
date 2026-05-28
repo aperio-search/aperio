@@ -9,13 +9,13 @@ use unicode_normalization::UnicodeNormalization;
 use crate::error::AppError;
 use crate::models::{CollectionCreated, CollectionInfo};
 
-const MAX_SHARD_SIZE: usize = 1000;
-const MAX_ROARING_SHARD_SIZE: u64 = 100_000;
 const SHARD_DELIM: char = '\0';
 
 #[derive(Clone)]
 pub struct StoreConfig {
     pub min_token_length: usize,
+    pub max_shard_size: usize,
+    pub max_roaring_shard_size: u64,
     pub strip_punctuation: bool,
 }
 
@@ -23,6 +23,8 @@ impl Default for StoreConfig {
     fn default() -> Self {
         Self {
             min_token_length: 2,
+            max_shard_size: 1000,
+            max_roaring_shard_size: 100_000,
             strip_punctuation: true,
         }
     }
@@ -247,6 +249,7 @@ impl Store {
         inverted: &fjall::Keyspace,
         word: &str,
         id: &str,
+        max_shard_size: usize,
     ) -> Result<(), AppError> {
         let marker_key = word.as_bytes();
         if inverted.get(marker_key)?.is_none() {
@@ -276,7 +279,7 @@ impl Store {
         );
 
         if *id > *last_shard.last {
-            if last_shard.ids.len() < MAX_SHARD_SIZE {
+            if last_shard.ids.len() < max_shard_size {
                 if last_shard.ids.binary_search(&id.to_string()).is_ok() {
                     return Ok(());
                 }
@@ -375,6 +378,7 @@ impl Store {
         inverted: &fjall::Keyspace,
         word: &str,
         id: u64,
+        max_roaring_shard_size: u64,
     ) -> Result<(), AppError> {
         let marker_key = word.as_bytes();
         if inverted.get(marker_key)?.is_none() {
@@ -401,7 +405,7 @@ impl Store {
             None => RoaringTreemap::new(),
         };
 
-        if bitmap.len() < MAX_ROARING_SHARD_SIZE {
+        if bitmap.len() < max_roaring_shard_size {
             bitmap.insert(id);
             let value = bincode::serde::encode_to_vec(&bitmap, bincode::config::standard())?;
             inverted.insert(&last_key, &value)?;
@@ -565,8 +569,8 @@ impl Store {
 
         for word in &new_words {
             match id_type {
-                IdType::Number => Self::add_to_roaring_posting_list(&inverted, word, id_u64.unwrap())?,
-                IdType::String => Self::add_to_posting_list(&inverted, word, id)?,
+                IdType::Number => Self::add_to_roaring_posting_list(&inverted, word, id_u64.unwrap(), self.config.max_roaring_shard_size)?,
+                IdType::String => Self::add_to_posting_list(&inverted, word, id, self.config.max_shard_size)?,
             }
         }
 
