@@ -4,6 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use tower_http::trace::TraceLayer;
 
 use crate::error::AppError;
 use crate::models::{
@@ -26,6 +27,7 @@ fn router_with_state(state: Arc<AppState>) -> Router {
         .route("/collections/{collection}/items/{id}", delete(delete_item))
         .route("/collections/{collection}", get(collection_info))
         .route("/collections/{collection}", delete(delete_collection))
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
         .fallback(not_found)
 }
@@ -76,12 +78,12 @@ async fn search(
         .store
         .search(&collection, &params.q, sort_desc, take, after)?;
     let elapsed = t0.elapsed();
-    println!(
-        "search '{}' on '{}': {:?} ({} results)",
-        params.q,
-        collection,
-        elapsed,
-        results.len()
+    tracing::info!(
+        query = %params.q,
+        collection = %collection,
+        elapsed_us = elapsed.as_micros(),
+        results = results.len(),
+        "search completed"
     );
     Ok(Json(SearchResponse { results, take }))
 }

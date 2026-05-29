@@ -196,6 +196,8 @@ impl Store {
             map.insert(name.to_string(), id_type_enum);
         }
 
+        tracing::info!(collection = %name, id_type = %id_type, "collection created");
+
         Ok(CollectionCreated {
             name: name.to_string(),
             id_type: id_type.to_string(),
@@ -571,6 +573,7 @@ impl Store {
             }
         }
 
+        tracing::debug!(collection = %collection, query = %query, results = results.len(), "roaring search completed");
         Ok(results)
     }
 
@@ -622,6 +625,7 @@ impl Store {
 
         let tokens: Vec<String> = new_words.into_iter().collect();
         docs.insert(id.as_bytes(), encode_rkyv!(&tokens)?)?;
+        tracing::debug!(collection = %collection, id = %id, tokens = tokens.len(), "item upserted");
         Ok(())
     }
 
@@ -750,6 +754,7 @@ impl Store {
             }
         }
 
+        tracing::debug!(collection = %collection, query = %query, results = results.len(), "string search completed");
         Ok(results)
     }
 
@@ -1026,6 +1031,7 @@ impl Store {
             .filter(|w| seen.insert(w.clone()))
             .take(10)
             .collect();
+        tracing::debug!(collection = %collection, normalized = %normalized, results = results.len(), "suggest completed");
         Ok(results)
     }
 
@@ -1061,6 +1067,7 @@ impl Store {
         }
 
         docs.remove(id.as_bytes())?;
+        tracing::debug!(collection = %collection, id = %id, "item deleted");
         Ok(())
     }
 
@@ -1121,6 +1128,7 @@ impl Store {
 
         let meta = self.meta_keyspace()?;
         meta.remove(collection.as_bytes())?;
+        tracing::info!(collection = %collection, "collection deleted");
         Ok(())
     }
 }

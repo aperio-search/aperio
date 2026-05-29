@@ -26,6 +26,7 @@ write_buffer_size = 67108864       # 64 MiB
 maintenance_threads = 4
 compression = "lz4"
 block_size = 65536                 # 64 KiB
+log_level = "info"                 # trace, debug, info, warn, error
 ```
 
 ## Configuration Reference
@@ -40,3 +41,4 @@ block_size = 65536                 # 64 KiB
 | `maintenance_threads` | `integer` | `min(# CPUs, 4)` | Number of background worker threads for compaction, flush, and journal maintenance |
 | `compression` | `string` | `"none"` (fjall default) | Data block compression algorithm: `"none"` or `"lz4"` |
 | `block_size` | `integer` (bytes) | `4096` (4 KiB, fjall default) | Data block size. Larger values (e.g. 64 KiB) improve range-scan throughput; smaller values reduce read amplification for point lookups |
+| `log_level` | `string` | `"info"` | Log level: `"trace"`, `"debug"`, `"info"`, `"warn"`, or `"error"`. Overridden by the `RUST_LOG` environment variable if set |

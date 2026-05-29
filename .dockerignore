@@ -5,3 +5,4 @@ data/
 *.md
 docs/
 docs/.vitepress/cache/
+docs/node_modules/

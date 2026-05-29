@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub write_buffer_size: Option<u64>,
     pub maintenance_threads: Option<usize>,
     pub compression: Option<String>,
+    pub log_level: Option<String>,
 }
 
 impl AppConfig {
@@ -24,22 +25,14 @@ impl AppConfig {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!(
-                    "warning: failed to read config file '{}': {}",
-                    path.display(),
-                    e
-                );
+                tracing::warn!(path = %path.display(), error = %e, "failed to read config file");
                 return Self::default();
             }
         };
         match toml::from_str(&content) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!(
-                    "warning: failed to parse config file '{}': {}",
-                    path.display(),
-                    e
-                );
+                tracing::warn!(path = %path.display(), error = %e, "failed to parse config file");
                 Self::default()
             }
         }
@@ -61,10 +54,7 @@ fn parse_compression(s: &str) -> Option<fjall::CompressionType> {
         "none" => Some(fjall::CompressionType::None),
         "lz4" => Some(fjall::CompressionType::Lz4),
         _ => {
-            eprintln!(
-                "warning: unknown compression type '{}', expected 'none' or 'lz4'",
-                s
-            );
+            tracing::warn!(value = %s, "unknown compression type, expected 'none' or 'lz4'");
             None
         }
     }
