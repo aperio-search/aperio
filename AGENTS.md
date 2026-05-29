@@ -70,8 +70,8 @@ Root: **Elastic License** (not MIT). `docs/` is MIT.
 
 ## Git workflow
 
-- **Never commit to `main`.** All work must be done on a feature branch.
-- After making changes, always open a PR (via `gh pr create`).
+- **Never commit to `main`.** All work must be done on the `development` branch.
+- After making changes on `development`, push them and open a PR (via `gh pr create` targeting `main`).
 - After the PR is opened, **ask the user** whether to merge it to `main`.
 - Do **not** manually include the PR number (e.g., `(#2)`) in branch commits. When you merge via GitHub or `gh pr merge`, the PR number is appended automatically. Adding it manually on the branch causes duplication like `(#5) (#5)`.
 
