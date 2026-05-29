@@ -31,7 +31,7 @@ block_size = 65536                 # 64 KiB
 ## Configuration Reference
 
 | Field | Type | Default | Description |
-|---|---|---|---|---|
+|---|---|---|---|
 | `min_token_length` | `integer` | `2` | Minimum length of indexed tokens — shorter tokens are discarded during indexing |
 | `max_shard_size` | `integer` | `1000` | Max document IDs per string posting-list shard |
 | `max_roaring_shard_size` | `integer` | `100000` | Max document IDs per roaring bitmap shard (only applies to `number` collections) |
