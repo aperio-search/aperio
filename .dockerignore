@@ -3,3 +3,5 @@ data/
 .git/
 .gitignore
 *.md
+docs/
+docs/.vitepress/cache/
