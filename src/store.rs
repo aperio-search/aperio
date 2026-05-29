@@ -505,20 +505,22 @@ impl Store {
             return Ok(Vec::new());
         }
 
-        let any_empty = words.iter().any(|w| {
-            Self::list_shard_indices(&inverted, w)
-                .map(|idx| idx.is_empty())
-                .unwrap_or(true)
-        });
-        if any_empty {
+        let mut word_shards: Vec<(String, Vec<usize>)> = words
+            .into_iter()
+            .map(|w| {
+                let indices = Self::list_shard_indices(&inverted, &w).unwrap_or_default();
+                (w, indices)
+            })
+            .collect();
+        word_shards.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
+        if word_shards.first().map_or(true, |(_, idx)| idx.is_empty()) {
             return Ok(Vec::new());
         }
 
         let mut result: Option<RoaringTreemap> = None;
-        for word in &words {
-            let indices = Self::list_shard_indices(&inverted, word)?;
+        for (word, indices) in &word_shards {
             let mut word_bitmap = RoaringTreemap::new();
-            for &shard_idx in &indices {
+            for &shard_idx in indices {
                 let key = Self::shard_key(word, shard_idx);
                 if let Some(data) = inverted.get(&key)? {
                     if let Ok(bitmap) = roaring_from_slice(&data) {
@@ -636,19 +638,21 @@ impl Store {
             return Ok(Vec::new());
         }
 
-        let any_empty = words.iter().any(|w| {
-            Self::list_shard_indices(&inverted, w)
-                .map(|idx| idx.is_empty())
-                .unwrap_or(true)
-        });
-        if any_empty {
+        let mut word_shards: Vec<(String, Vec<usize>)> = words
+            .into_iter()
+            .map(|w| {
+                let indices = Self::list_shard_indices(&inverted, &w).unwrap_or_default();
+                (w, indices)
+            })
+            .collect();
+        word_shards.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
+        if word_shards.first().map_or(true, |(_, idx)| idx.is_empty()) {
             return Ok(Vec::new());
         }
 
-        let mut iters: Vec<WordIterState> = Vec::with_capacity(words.len());
-        for word in &words {
-            let indices = Self::list_shard_indices(&inverted, word)?;
-            let mut state = WordIterState::new(indices, sort_desc);
+        let mut iters: Vec<WordIterState> = Vec::with_capacity(word_shards.len());
+        for (word, indices) in &word_shards {
+            let mut state = WordIterState::new(indices.clone(), sort_desc);
             if !sort_desc {
                 Self::load_first_shard(&inverted, word, &mut state)?;
             } else {
@@ -658,7 +662,7 @@ impl Store {
         }
 
         if let Some(cursor) = after {
-            for (i, word) in words.iter().enumerate() {
+            for (i, (word, _)) in word_shards.iter().enumerate() {
                 Self::skip_past_cursor(&inverted, word, cursor, &mut iters[i], sort_desc)?;
             }
         }
@@ -700,7 +704,7 @@ impl Store {
             let mut all_have = true;
 
             for (i, state) in iters.iter_mut().enumerate() {
-                Self::seek_to(&inverted, &words[i], state, &pivot, sort_desc)?;
+                Self::seek_to(&inverted, &word_shards[i].0, state, &pivot, sort_desc)?;
                 match state.current() {
                     None => {
                         all_have = false;
@@ -721,7 +725,7 @@ impl Store {
                     break;
                 }
                 for (i, state) in iters.iter_mut().enumerate() {
-                    Self::advance_iter(&inverted, &words[i], state, sort_desc)?;
+                    Self::advance_iter(&inverted, &word_shards[i].0, state, sort_desc)?;
                 }
             }
         }
