@@ -502,12 +502,12 @@ impl Store {
     ) -> Result<Vec<String>, AppError> {
         let inverted = self.inverted_keyspace(collection)?;
 
-        let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
-        if words.is_empty() {
+        let tokens = Self::tokenize(query, &self.config);
+        if tokens.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut word_shards: Vec<(String, Vec<usize>)> = words
+        let mut word_shards: Vec<(String, Vec<usize>)> = tokens
             .into_iter()
             .map(|w| {
                 let indices = Self::list_shard_indices(&inverted, &w).unwrap_or_default();
@@ -629,12 +629,12 @@ impl Store {
         }
         let inverted = self.inverted_keyspace(collection)?;
 
-        let words: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
-        if words.is_empty() {
+        let tokens = Self::tokenize(query, &self.config);
+        if tokens.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut word_shards: Vec<(String, Vec<usize>)> = words
+        let mut word_shards: Vec<(String, Vec<usize>)> = tokens
             .into_iter()
             .map(|w| {
                 let indices = Self::list_shard_indices(&inverted, &w).unwrap_or_default();
