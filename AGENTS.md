@@ -1,84 +1,73 @@
-# Aster — AGENTS.md
+# Aster — agent guide
+
+## First-read warning
+
+**The README is stale.** It says "sled" everywhere. The code uses **fjall** 3.x (LSM-tree). Treat README as conceptual reference only; the source in `src/` is the source of truth.
 
 ## Project structure
 
-Single Rust binary (`edition 2024`), no workspace, no tests yet. Server starts on port **3000**, data dir defaults to `./data` (overridable via `DATA_DIR` env var). Database file is `{DATA_DIR}/aster.db`.
+Single-crate Rust project (`aster`). No workspace, no sub-crates.
 
-- `src/main.rs` — entrypoint; opens fjall DB, creates `Store`, binds `0.0.0.0:3000`
-- `src/store.rs` — core indexing logic; posting-list sharding with configurable shard sizes
-- `src/config.rs` — optional TOML config file loader (`CONFIG_FILE` env var)
-- `src/routes.rs` — axum router with 6 endpoints + fallback
-- `src/error.rs` — custom `AppError` → JSON error responses
-- `src/models.rs` — request/response structs
-
-## Key deps (Cargo.toml)
-
-| Crate | Purpose |
-|---|---|
-| `axum 0.8` | HTTP framework |
-| `fjall 3.1` | Embedded KV store (disk-backed, LSM-tree) |
-| `roaring 0.11` | Compressed bitmap for numeric-id posting lists |
-| `unicode-normalization 0.1` | NFKD + combining-mark stripping |
-| `serde / serde_json` | JSON wire format for API & posting lists |
-| `toml 0.8` | Config file parsing |
+```
+src/
+  main.rs       — entrypoint, reads DATA_DIR / CONFIG_FILE env vars, opens fjall DB, binds :3000
+  lib.rs        — pub mod config, models, error, routes, store
+  config.rs     — optional TOML config file parsing
+  routes.rs     — Axum router with REST endpoints
+  store.rs      — core engine: tokenization, inverted index, two ID strategies
+```
 
 ## Commands
 
 ```sh
-cargo run          # dev server on :3000, ephemeral ./data/aster.db
-cargo run --release # optimized build
-cargo check        # fast compile check
+cargo check              # compile-check only (fastest feedback)
+cargo clippy             # lint (no custom config, uses defaults)
+cargo fmt                # format (no custom config, uses rustfmt defaults)
+cargo test               # runs — but there are zero tests in the codebase
+cargo run                # dev server on :3000 (data persists to ./data/aster.db)
+cargo run --release      # optimized build
 ```
 
-There are **no tests** (`cargo test` produces nothing). No linter/formatter config exists.
+## Setup
 
-## API endpoints
+- Rust toolchain: pinned via `rust-toolchain.toml` to channel `1.95`
+- Edition 2024
 
-| Method | Path | Body/Query |
+## Runtime
+
+Two environment variables control the server:
+
+| Variable | Default | Description |
 |---|---|---|
-| `POST`   | `/collections/{collection}/items` | `{ "id": "...", "content": "..." }` |
-| `GET`    | `/collections/{collection}/search` | `?q=term&sort=desc&take=20&after=` — returns `{ results: [id, ...], take }` |
-| `GET`    | `/collections/{collection}/suggest` | `?q=prefix` |
-| `DELETE` | `/collections/{collection}/items/{id}` | — |
-| `DELETE` | `/collections/{collection}` | — |
-| `GET`    | `/status` | — |
+| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aster.db`) |
+| `CONFIG_FILE` | (none) | Path to optional TOML config file |
 
-## Query quirks
+Config file parsing is **silently lenient**: on any read/parse error it falls back to defaults with only a warning to stderr. No hard failures.
 
-- Search is **AND-only** (multiple terms, all must match). No OR, no filtering.
-- Sort is by **document ID lexicographic order**, default `DESC`. Use ULID/UUIDv7/zero-padded IDs for predictable ordering.
-- Cursor pagination: `after` is exclusive — in `desc` mode filters IDs < cursor, in `asc` mode filters IDs > cursor. `take` clamped 1–100.
-- Suggest returns up to **10 prefix matches** from the inverted index (uses `fjall::Keyspace::prefix`).
-- Tokenization: NFKD normalize → strip combining marks → lowercase → strip non-alphanumeric (configurable via `StoreConfig::strip_punctuation`) → filter tokens shorter than `min_token_length` (default 2, configurable via config file).
+## Two ID strategies (store internals)
 
-## Storage layout
+Collections are created with an `id_type`:
+- **`string`** — posting lists stored as rkyv-archived shards (max_shard_size configurable)
+- **`number`** — posting lists stored as RoaringTreemap bitmaps (max_roaring_shard_size configurable)
 
-Each collection uses two fjall keyspaces: `{collection}:inverted` (word→[doc IDs]) and `{collection}:docs` (doc ID→[tokens] — JSON array of normalized tokens). See `store.rs:39-45`.
+`POST /collections` with `{"name": "...", "id_type": "string" | "number"}`.
+
+## Docs site
+
+In `docs/` — VitePress, managed via **bun** (not npm). Lockfile is `docs/bun.lock`.
+
+```sh
+cd docs && bun install && bun run docs:dev
+```
 
 ## Docker
 
-```sh
-docker build -t aster .
-docker run -v $(pwd)/data:/data -e DATA_DIR=/data -p 3000:3000 aster
+Multi-stage build in `Dockerfile`. Image exposes `:3000`, expects `DATA_DIR=/data` and optional `CONFIG_FILE=/data/config.toml`. Verified via CI-less local build.
 
-# With custom config:
-docker run -v $(pwd)/data:/data -v $(pwd)/config.toml:/data/config.toml -e DATA_DIR=/data -p 3000:3000 aster
-```
+## License
 
-`Dockerfile` uses `rust:1.95-slim-bookworm` to build, `debian:bookworm-slim` at runtime. Binary lives at `/aster`.
+Root: **Elastic License** (not MIT). `docs/` is MIT.
 
-## Style notes
+## What is NOT present
 
-- No comments in code — match that convention when editing.
-- `AppError` converts `fjall::Error` to `Internal` automatically (`error.rs:22`).
-- All endpoints return JSON errors with shape `{ "error": "..." }`.
-
-## Config file
-
-Optional TOML file at `CONFIG_FILE` env var path (default not loaded). Fields:
-
-```toml
-min_token_length = 2           # minimum length of indexed tokens
-max_shard_size = 1000          # max doc IDs per string posting-list shard
-max_roaring_shard_size = 100000 # max doc IDs per roaring bitmap shard
-```
+No CI workflows, no pre-commit hooks, no linter/formatter config files beyond defaults. No integration tests, no benchmarks. No generated code or codegen steps. No database migrations.
