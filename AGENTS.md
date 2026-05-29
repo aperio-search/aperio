@@ -73,6 +73,7 @@ Root: **Elastic License** (not MIT). `docs/` is MIT.
 - **Never commit to `main`.** All work must be done on a feature branch.
 - After making changes, always open a PR (via `gh pr create`).
 - After the PR is opened, **ask the user** whether to merge it to `main`.
+- When committing (e.g., after merging), **always keep the PR number** (e.g., `(#2)`) in the commit message. Don't remove it.
 
 ## What is NOT present
 
