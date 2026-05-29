@@ -24,14 +24,22 @@ impl AppConfig {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("warning: failed to read config file '{}': {}", path.display(), e);
+                eprintln!(
+                    "warning: failed to read config file '{}': {}",
+                    path.display(),
+                    e
+                );
                 return Self::default();
             }
         };
         match toml::from_str(&content) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!("warning: failed to parse config file '{}': {}", path.display(), e);
+                eprintln!(
+                    "warning: failed to parse config file '{}': {}",
+                    path.display(),
+                    e
+                );
                 Self::default()
             }
         }
@@ -53,7 +61,10 @@ fn parse_compression(s: &str) -> Option<fjall::CompressionType> {
         "none" => Some(fjall::CompressionType::None),
         "lz4" => Some(fjall::CompressionType::Lz4),
         _ => {
-            eprintln!("warning: unknown compression type '{}', expected 'none' or 'lz4'", s);
+            eprintln!(
+                "warning: unknown compression type '{}', expected 'none' or 'lz4'",
+                s
+            );
             None
         }
     }

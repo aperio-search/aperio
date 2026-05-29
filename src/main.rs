@@ -23,9 +23,7 @@ async fn main() {
     let store = Store::with_config(db, store_config);
     let app = routes::create_router(store);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
     axum::serve(listener, app).await.unwrap();
 }

@@ -16,19 +16,19 @@ pub struct AppState {
     pub store: Store,
 }
 
-    fn router_with_state(state: Arc<AppState>) -> Router {
-        Router::new()
-            .route("/status", get(status))
-            .route("/collections", post(create_collection))
-            .route("/collections/{collection}/items", post(upsert_item))
-            .route("/collections/{collection}/search", get(search))
-            .route("/collections/{collection}/suggest", get(suggest))
-            .route("/collections/{collection}/items/{id}", delete(delete_item))
-            .route("/collections/{collection}", get(collection_info))
-            .route("/collections/{collection}", delete(delete_collection))
-            .with_state(state)
-            .fallback(not_found)
-    }
+fn router_with_state(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/status", get(status))
+        .route("/collections", post(create_collection))
+        .route("/collections/{collection}/items", post(upsert_item))
+        .route("/collections/{collection}/search", get(search))
+        .route("/collections/{collection}/suggest", get(suggest))
+        .route("/collections/{collection}/items/{id}", delete(delete_item))
+        .route("/collections/{collection}", get(collection_info))
+        .route("/collections/{collection}", delete(delete_collection))
+        .with_state(state)
+        .fallback(not_found)
+}
 
 pub fn create_router(store: Store) -> Router {
     let state = Arc::new(AppState { store });
@@ -65,11 +65,16 @@ async fn search(
     let take = params.take.unwrap_or(20).clamp(1, 100);
     let after = params.after.as_deref();
     let t0 = std::time::Instant::now();
-    let results = state.store.search(&collection, &params.q, sort_desc, take, after)?;
+    let results = state
+        .store
+        .search(&collection, &params.q, sort_desc, take, after)?;
     let elapsed = t0.elapsed();
     println!(
         "search '{}' on '{}': {:?} ({} results)",
-        params.q, collection, elapsed, results.len()
+        params.q,
+        collection,
+        elapsed,
+        results.len()
     );
     Ok(Json(SearchResponse { results, take }))
 }

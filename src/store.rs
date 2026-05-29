@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, RwLock};
 
-use roaring::RoaringTreemap;
-use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use serde::{Deserialize, Serialize};
 use charabia::Tokenize;
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
+use roaring::RoaringTreemap;
+use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::models::{CollectionCreated, CollectionInfo};
@@ -64,15 +64,24 @@ impl StoreConfig {
             opts = opts.max_memtable_size(size);
         }
         if let Some(comp) = self.compression {
-            opts = opts.data_block_compression_policy(
-                fjall::config::CompressionPolicy::all(comp),
-            );
+            opts = opts.data_block_compression_policy(fjall::config::CompressionPolicy::all(comp));
         }
         opts
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Archive, RkyvSerialize, RkyvDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Archive,
+    RkyvSerialize,
+    RkyvDeserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum IdType {
     Number,
@@ -105,9 +114,7 @@ impl Store {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
                         let name = String::from_utf8_lossy(&key).to_string();
-                        if let Ok(id_type) =
-                            decode_rkyv!(IdType, &value)
-                        {
+                        if let Ok(id_type) = decode_rkyv!(IdType, &value) {
                             map.insert(name, id_type);
                         }
                     }
@@ -134,7 +141,9 @@ impl Store {
     }
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
-        Ok(self.db.keyspace("_collections", || self.config.keyspace_opts())?)
+        Ok(self
+            .db
+            .keyspace("_collections", || self.config.keyspace_opts())?)
     }
 
     fn validate_collection_exists(&self, collection: &str) -> Result<IdType, AppError> {
@@ -146,7 +155,11 @@ impl Store {
             .ok_or_else(|| AppError::NotFound(format!("collection '{}' not found", collection)))
     }
 
-    pub fn create_collection(&self, name: &str, id_type: &str) -> Result<CollectionCreated, AppError> {
+    pub fn create_collection(
+        &self,
+        name: &str,
+        id_type: &str,
+    ) -> Result<CollectionCreated, AppError> {
         let id_type_enum = match id_type {
             "number" => IdType::Number,
             "string" => IdType::String,
@@ -154,7 +167,7 @@ impl Store {
                 return Err(AppError::BadRequest(format!(
                     "invalid id_type '{}', expected 'number' or 'string'",
                     id_type
-                )))
+                )));
             }
         };
 
@@ -163,7 +176,10 @@ impl Store {
         {
             let mut map = self.collections.write().unwrap();
             if map.contains_key(name) {
-                return Err(AppError::BadRequest(format!("collection '{}' already exists", name)));
+                return Err(AppError::BadRequest(format!(
+                    "collection '{}' already exists",
+                    name
+                )));
             }
 
             let meta = self.meta_keyspace()?;
@@ -200,8 +216,8 @@ impl Store {
         let key = Self::shard_key(word, shard);
         match inverted.get(&key)? {
             Some(data) => {
-                let shard: PostingShard = decode_rkyv!(PostingShard, &data)
-                    .unwrap_or_else(|_| PostingShard {
+                let shard: PostingShard =
+                    decode_rkyv!(PostingShard, &data).unwrap_or_else(|_| PostingShard {
                         first: String::new(),
                         last: String::new(),
                         ids: Vec::new(),
@@ -212,10 +228,7 @@ impl Store {
         }
     }
 
-    fn list_shard_indices(
-        inverted: &fjall::Keyspace,
-        word: &str,
-    ) -> Result<Vec<usize>, AppError> {
+    fn list_shard_indices(inverted: &fjall::Keyspace, word: &str) -> Result<Vec<usize>, AppError> {
         let prefix = format!("{}{}", word, SHARD_DELIM).into_bytes();
         let mut indices: Vec<usize> = Vec::new();
         for guard in inverted.prefix(&prefix) {
@@ -237,8 +250,8 @@ impl Store {
         id: &str,
         indices: &[usize],
     ) -> Result<usize, AppError> {
-        let first_shard = Self::load_posting_shard(inverted, word, indices[0])?
-            .unwrap_or_else(|| PostingShard {
+        let first_shard =
+            Self::load_posting_shard(inverted, word, indices[0])?.unwrap_or_else(|| PostingShard {
                 first: String::new(),
                 last: String::new(),
                 ids: Vec::new(),
@@ -298,13 +311,12 @@ impl Store {
         }
 
         let last_idx = *indices.last().unwrap();
-        let last_shard = Self::load_posting_shard(inverted, word, last_idx)?.unwrap_or_else(
-            || PostingShard {
+        let last_shard =
+            Self::load_posting_shard(inverted, word, last_idx)?.unwrap_or_else(|| PostingShard {
                 first: String::new(),
                 last: String::new(),
                 ids: Vec::new(),
-            },
-        );
+            });
 
         if *id > *last_shard.last {
             if last_shard.ids.len() < max_shard_size {
@@ -329,13 +341,12 @@ impl Store {
         }
 
         let target = Self::find_shard_for_id(inverted, word, id, &indices)?;
-        let current = Self::load_posting_shard(inverted, word, target)?.unwrap_or_else(
-            || PostingShard {
+        let current =
+            Self::load_posting_shard(inverted, word, target)?.unwrap_or_else(|| PostingShard {
                 first: String::new(),
                 last: String::new(),
                 ids: Vec::new(),
-            },
-        );
+            });
 
         if current.ids.binary_search(&id.to_string()).is_ok() {
             return Ok(());
@@ -505,8 +516,7 @@ impl Store {
             for &shard_idx in &indices {
                 let key = Self::shard_key(word, shard_idx);
                 if let Some(data) = inverted.get(&key)? {
-                    if let Ok(bitmap) = roaring_from_slice(&data)
-                    {
+                    if let Ok(bitmap) = roaring_from_slice(&data) {
                         word_bitmap |= &bitmap;
                     }
                 }
@@ -552,14 +562,12 @@ impl Store {
     pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
         let id_type = self.validate_collection_exists(collection)?;
         let id_u64 = match id_type {
-            IdType::Number => {
-                Some(id.parse::<u64>().map_err(|_| {
-                    AppError::BadRequest(format!(
-                        "invalid id '{}': collection '{}' expects numeric ids",
-                        id, collection
-                    ))
-                })?)
-            }
+            IdType::Number => Some(id.parse::<u64>().map_err(|_| {
+                AppError::BadRequest(format!(
+                    "invalid id '{}': collection '{}' expects numeric ids",
+                    id, collection
+                ))
+            })?),
             IdType::String => None,
         };
 
@@ -575,7 +583,9 @@ impl Store {
             let old_words: HashSet<String> = old_tokens.into_iter().collect();
             for word in old_words.difference(&new_words) {
                 match id_type {
-                    IdType::Number => Self::remove_from_roaring_posting_list(&inverted, word, id_u64.unwrap())?,
+                    IdType::Number => {
+                        Self::remove_from_roaring_posting_list(&inverted, word, id_u64.unwrap())?
+                    }
                     IdType::String => Self::remove_from_posting_list(&inverted, word, id)?,
                 }
             }
@@ -583,16 +593,20 @@ impl Store {
 
         for word in &new_words {
             match id_type {
-                IdType::Number => Self::add_to_roaring_posting_list(&inverted, word, id_u64.unwrap(), self.config.max_roaring_shard_size)?,
-                IdType::String => Self::add_to_posting_list(&inverted, word, id, self.config.max_shard_size)?,
+                IdType::Number => Self::add_to_roaring_posting_list(
+                    &inverted,
+                    word,
+                    id_u64.unwrap(),
+                    self.config.max_roaring_shard_size,
+                )?,
+                IdType::String => {
+                    Self::add_to_posting_list(&inverted, word, id, self.config.max_shard_size)?
+                }
             }
         }
 
         let tokens: Vec<String> = new_words.into_iter().collect();
-        docs.insert(
-            id.as_bytes(),
-            encode_rkyv!(&tokens)?,
-        )?;
+        docs.insert(id.as_bytes(), encode_rkyv!(&tokens)?)?;
         Ok(())
     }
 
@@ -905,14 +919,12 @@ impl Store {
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
         let id_type = self.validate_collection_exists(collection)?;
         let id_u64 = match id_type {
-            IdType::Number => {
-                Some(id.parse::<u64>().map_err(|_| {
-                    AppError::BadRequest(format!(
-                        "invalid id '{}': collection '{}' expects numeric ids",
-                        id, collection
-                    ))
-                })?)
-            }
+            IdType::Number => Some(id.parse::<u64>().map_err(|_| {
+                AppError::BadRequest(format!(
+                    "invalid id '{}': collection '{}' expects numeric ids",
+                    id, collection
+                ))
+            })?),
             IdType::String => None,
         };
 
@@ -922,15 +934,15 @@ impl Store {
         let docs = self.docs_keyspace(collection)?;
 
         let tokens: Vec<String> = match docs.get(id.as_bytes())? {
-            Some(data) => {
-                decode_rkyv!(Vec<String>, &data)?
-            }
+            Some(data) => decode_rkyv!(Vec<String>, &data)?,
             None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
         };
 
         for word in &tokens {
             match id_type {
-                IdType::Number => Self::remove_from_roaring_posting_list(&inverted, word, id_u64.unwrap())?,
+                IdType::Number => {
+                    Self::remove_from_roaring_posting_list(&inverted, word, id_u64.unwrap())?
+                }
                 IdType::String => Self::remove_from_posting_list(&inverted, word, id)?,
             }
         }
@@ -969,12 +981,16 @@ impl Store {
 
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
-            let inv = self.db.keyspace(&inv_name, || self.config.keyspace_opts())?;
+            let inv = self
+                .db
+                .keyspace(&inv_name, || self.config.keyspace_opts())?;
             self.db.delete_keyspace(inv)?;
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
-            let docs = self.db.keyspace(&docs_name, || self.config.keyspace_opts())?;
+            let docs = self
+                .db
+                .keyspace(&docs_name, || self.config.keyspace_opts())?;
             self.db.delete_keyspace(docs)?;
         }
 
