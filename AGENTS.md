@@ -75,6 +75,10 @@ Root: **Elastic License** (not MIT). `docs/` is MIT.
 - After the PR is opened, **ask the user** whether to merge it to `main`.
 - Do **not** manually include the PR number (e.g., `(#2)`) in branch commits. When you merge via GitHub or `gh pr merge`, the PR number is appended automatically. Adding it manually on the branch causes duplication like `(#5) (#5)`.
 
+## Configuration changes
+
+When adding, removing, or modifying any config option in `src/config.rs`, update the reference table and example in `docs/configuration.md` to match.
+
 ## What is NOT present
 
 No CI workflows, no pre-commit hooks, no linter/formatter config files beyond defaults. No integration tests, no benchmarks. No generated code or codegen steps. No database migrations.
