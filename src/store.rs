@@ -29,11 +29,15 @@ macro_rules! decode_rkyv {
 }
 
 fn roaring_to_vec(b: &RoaringTreemap) -> Result<Vec<u8>, AppError> {
-    Ok(serde_json::to_vec(b)?)
+    let mut buf = Vec::with_capacity(b.serialized_size());
+    b.serialize_into(&mut buf)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(buf)
 }
 
 fn roaring_from_slice(bytes: &[u8]) -> Result<RoaringTreemap, AppError> {
-    Ok(serde_json::from_slice(bytes)?)
+    RoaringTreemap::deserialize_from(bytes)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 #[derive(Clone)]
@@ -747,18 +751,24 @@ impl Store {
     ) -> Result<(), AppError> {
         while (state.shard_pos as usize) < state.indices.len() {
             let idx = state.indices[state.shard_pos as usize];
-            match Self::load_posting_shard(inverted, word, idx)? {
-                Some(shard) if !shard.ids.is_empty() => {
-                    state.cur = shard.ids;
-                    state.cur_pos = 0;
-                    return Ok(());
+            let key = Self::shard_key(word, idx);
+            match inverted.get(&key)? {
+                Some(data) => {
+                    if let Ok(archived) =
+                        rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
+                    {
+                        if !archived.ids.is_empty() {
+                            state.cur_bytes = data.to_vec();
+                            state.cur_pos = 0;
+                            return Ok(());
+                        }
+                    }
                 }
-                _ => {
-                    state.shard_pos += 1;
-                }
+                None => {}
             }
+            state.shard_pos += 1;
         }
-        state.cur.clear();
+        state.cur_bytes.clear();
         state.cur_pos = 0;
         Ok(())
     }
@@ -770,18 +780,24 @@ impl Store {
     ) -> Result<(), AppError> {
         while state.shard_pos >= 0 {
             let idx = state.indices[state.shard_pos as usize];
-            match Self::load_posting_shard(inverted, word, idx)? {
-                Some(shard) if !shard.ids.is_empty() => {
-                    state.cur = shard.ids;
-                    state.cur_pos = state.cur.len().saturating_sub(1);
-                    return Ok(());
+            let key = Self::shard_key(word, idx);
+            match inverted.get(&key)? {
+                Some(data) => {
+                    if let Ok(archived) =
+                        rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
+                    {
+                        if !archived.ids.is_empty() {
+                            state.cur_bytes = data.to_vec();
+                            state.cur_pos = archived.ids.len().saturating_sub(1);
+                            return Ok(());
+                        }
+                    }
                 }
-                _ => {
-                    state.shard_pos -= 1;
-                }
+                None => {}
             }
+            state.shard_pos -= 1;
         }
-        state.cur.clear();
+        state.cur_bytes.clear();
         state.cur_pos = 0;
         Ok(())
     }
@@ -797,18 +813,26 @@ impl Store {
                 loop {
                     state.shard_pos -= 1;
                     if state.shard_pos < 0 {
-                        state.cur.clear();
+                        state.cur_bytes.clear();
                         state.cur_pos = 0;
                         return Ok(());
                     }
                     let idx = state.indices[state.shard_pos as usize];
-                    match Self::load_posting_shard(inverted, word, idx)? {
-                        Some(shard) if !shard.ids.is_empty() => {
-                            state.cur = shard.ids;
-                            state.cur_pos = state.cur.len().saturating_sub(1);
-                            return Ok(());
+                    let key = Self::shard_key(word, idx);
+                    match inverted.get(&key)? {
+                        Some(data) => {
+                            if let Ok(archived) =
+                                rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
+                            {
+                                let len = archived.ids.len();
+                                if len > 0 {
+                                    state.cur_bytes = data.to_vec();
+                                    state.cur_pos = len.saturating_sub(1);
+                                    return Ok(());
+                                }
+                            }
                         }
-                        _ => {}
+                        None => {}
                     }
                 }
             } else {
@@ -816,22 +840,29 @@ impl Store {
             }
         } else {
             state.cur_pos += 1;
-            if state.cur_pos >= state.cur.len() {
+            if state.cur_pos >= state.ids_len() {
                 loop {
                     state.shard_pos += 1;
                     if (state.shard_pos as usize) >= state.indices.len() {
-                        state.cur.clear();
+                        state.cur_bytes.clear();
                         state.cur_pos = 0;
                         return Ok(());
                     }
                     let idx = state.indices[state.shard_pos as usize];
-                    match Self::load_posting_shard(inverted, word, idx)? {
-                        Some(shard) if !shard.ids.is_empty() => {
-                            state.cur = shard.ids;
-                            state.cur_pos = 0;
-                            return Ok(());
+                    let key = Self::shard_key(word, idx);
+                    match inverted.get(&key)? {
+                        Some(data) => {
+                            if let Ok(archived) =
+                                rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
+                            {
+                                if !archived.ids.is_empty() {
+                                    state.cur_bytes = data.to_vec();
+                                    state.cur_pos = 0;
+                                    return Ok(());
+                                }
+                            }
                         }
-                        _ => {}
+                        None => {}
                     }
                 }
             }
@@ -858,21 +889,42 @@ impl Store {
             .unwrap_or(state.indices.len().saturating_sub(1));
         state.shard_pos = pos_in_indices as isize;
 
-        let shard = match Self::load_posting_shard(inverted, word, shard_idx)? {
-            Some(s) => s,
+        let key = Self::shard_key(word, shard_idx);
+        match inverted.get(&key)? {
+            Some(data) => {
+                let archived =
+                    match rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data) {
+                        Ok(a) => a,
+                        Err(_) => {
+                            state.cur_bytes.clear();
+                            state.cur_pos = 0;
+                            return Ok(());
+                        }
+                    };
+                let ids = &archived.ids;
+                let mut lo = 0;
+                let mut hi = ids.len();
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    match ids.get(mid) {
+                        Some(s) if s.as_str() < cursor => {
+                            lo = mid + 1;
+                        }
+                        _ => {
+                            hi = mid;
+                        }
+                    }
+                }
+                let pos = lo;
+                state.cur_bytes = data.to_vec();
+                state.cur_pos = pos.min(state.ids_len().saturating_sub(1));
+            }
             None => {
-                state.cur.clear();
+                state.cur_bytes.clear();
                 state.cur_pos = 0;
                 return Ok(());
             }
-        };
-        state.cur = shard.ids;
-
-        let pos = state
-            .cur
-            .binary_search(&cursor.to_string())
-            .unwrap_or_else(|e| e);
-        state.cur_pos = pos.min(state.cur.len().saturating_sub(1));
+        }
 
         loop {
             let cur = state.current();
@@ -1003,7 +1055,7 @@ impl Store {
 struct WordIterState {
     indices: Vec<usize>,
     shard_pos: isize,
-    cur: Vec<String>,
+    cur_bytes: Vec<u8>,
     cur_pos: usize,
 }
 
@@ -1014,24 +1066,38 @@ impl WordIterState {
             Self {
                 indices,
                 shard_pos: last as isize,
-                cur: Vec::new(),
+                cur_bytes: Vec::new(),
                 cur_pos: 0,
             }
         } else {
             Self {
                 indices,
                 shard_pos: 0,
-                cur: Vec::new(),
+                cur_bytes: Vec::new(),
                 cur_pos: 0,
             }
         }
     }
 
+    fn current_archived(&self) -> Option<&ArchivedPostingShard> {
+        if self.cur_bytes.is_empty() {
+            return None;
+        }
+        rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&self.cur_bytes).ok()
+    }
+
     fn current(&self) -> Option<&str> {
-        if self.cur.is_empty() || self.cur_pos >= self.cur.len() {
-            None
-        } else {
-            Some(&self.cur[self.cur_pos])
+        let archived = self.current_archived()?;
+        if self.cur_pos >= archived.ids.len() {
+            return None;
+        }
+        archived.ids.get(self.cur_pos).map(|s| s.as_str())
+    }
+
+    fn ids_len(&self) -> usize {
+        match self.current_archived() {
+            Some(archived) => archived.ids.len(),
+            None => 0,
         }
     }
 }
