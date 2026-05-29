@@ -502,36 +502,47 @@ impl Store {
     ) -> Result<Vec<String>, AppError> {
         let inverted = self.inverted_keyspace(collection)?;
 
-        let tokens = Self::tokenize(query, &self.config);
+        let tokens: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
         if tokens.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut word_shards: Vec<(String, Vec<usize>)> = tokens
-            .into_iter()
-            .map(|w| {
-                let indices = Self::list_shard_indices(&inverted, &w).unwrap_or_default();
-                (w, indices)
-            })
-            .collect();
+        let mut word_shards: Vec<(String, Vec<usize>)> = std::thread::scope(|s| {
+            let handles: Vec<_> = tokens.iter().map(|w| {
+                let inv = inverted.clone();
+                let w = w.clone();
+                s.spawn(move || {
+                    let indices = Self::list_shard_indices(&inv, &w).unwrap_or_default();
+                    (w, indices)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
         word_shards.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
         if word_shards.first().map_or(true, |(_, idx)| idx.is_empty()) {
             return Ok(Vec::new());
         }
 
-        let mut word_bitmaps: Vec<RoaringTreemap> = Vec::with_capacity(word_shards.len());
-        for (word, indices) in &word_shards {
-            let mut word_bitmap = RoaringTreemap::new();
-            for &shard_idx in indices {
-                let key = Self::shard_key(word, shard_idx);
-                if let Some(data) = inverted.get(&key)? {
-                    if let Ok(bitmap) = roaring_from_slice(&data) {
-                        word_bitmap |= &bitmap;
+        let word_bitmaps: Vec<RoaringTreemap> = std::thread::scope(|s| {
+            let handles: Vec<_> = word_shards.iter().map(|(word, indices)| {
+                let inv = inverted.clone();
+                let word = word.clone();
+                let indices = indices.clone();
+                s.spawn(move || -> Result<RoaringTreemap, AppError> {
+                    let mut word_bitmap = RoaringTreemap::new();
+                    for &shard_idx in &indices {
+                        let key = Self::shard_key(&word, shard_idx);
+                        if let Some(data) = inv.get(&key)? {
+                            if let Ok(bitmap) = roaring_from_slice(&data) {
+                                word_bitmap |= &bitmap;
+                            }
+                        }
                     }
-                }
-            }
-            word_bitmaps.push(word_bitmap);
-        }
+                    Ok(word_bitmap)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Result<Vec<_>, _>>()
+        })?;
 
         let bitmap = word_bitmaps.iter().intersection();
 
@@ -629,33 +640,44 @@ impl Store {
         }
         let inverted = self.inverted_keyspace(collection)?;
 
-        let tokens = Self::tokenize(query, &self.config);
+        let tokens: Vec<String> = Self::tokenize(query, &self.config).into_iter().collect();
         if tokens.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut word_shards: Vec<(String, Vec<usize>)> = tokens
-            .into_iter()
-            .map(|w| {
-                let indices = Self::list_shard_indices(&inverted, &w).unwrap_or_default();
-                (w, indices)
-            })
-            .collect();
+        let mut word_shards: Vec<(String, Vec<usize>)> = std::thread::scope(|s| {
+            let handles: Vec<_> = tokens.iter().map(|w| {
+                let inv = inverted.clone();
+                let w = w.clone();
+                s.spawn(move || {
+                    let indices = Self::list_shard_indices(&inv, &w).unwrap_or_default();
+                    (w, indices)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
         word_shards.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
         if word_shards.first().map_or(true, |(_, idx)| idx.is_empty()) {
             return Ok(Vec::new());
         }
 
-        let mut iters: Vec<WordIterState> = Vec::with_capacity(word_shards.len());
-        for (word, indices) in &word_shards {
-            let mut state = WordIterState::new(indices.clone(), sort_desc);
-            if !sort_desc {
-                Self::load_first_shard(&inverted, word, &mut state)?;
-            } else {
-                Self::load_last_shard(&inverted, word, &mut state)?;
-            }
-            iters.push(state);
-        }
+        let mut iters: Vec<WordIterState> = std::thread::scope(|s| {
+            let handles: Vec<_> = word_shards.iter().map(|(word, indices)| {
+                let inv = inverted.clone();
+                let word = word.clone();
+                let indices = indices.clone();
+                s.spawn(move || -> Result<WordIterState, AppError> {
+                    let mut state = WordIterState::new(indices, sort_desc);
+                    if !sort_desc {
+                        Self::load_first_shard(&inv, &word, &mut state)?;
+                    } else {
+                        Self::load_last_shard(&inv, &word, &mut state)?;
+                    }
+                    Ok(state)
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Result<Vec<_>, _>>()
+        })?;
 
         if let Some(cursor) = after {
             for (i, (word, _)) in word_shards.iter().enumerate() {
