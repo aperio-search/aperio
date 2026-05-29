@@ -11,7 +11,7 @@ hero:
       link: /quickstart
     - theme: alt
       text: GitHub
-      link: https://github.com/andresribeiro/aperio
+      link: https://github.com/aperio-search/aperio
 
 features:
   - title: Screamingly Fast

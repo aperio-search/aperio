@@ -1,6 +1,6 @@
 # Quickstart
 
-> If you have a few seconds, [a star on GitHub helps us a lot](https://github.com/andresribeiro/aperio)!
+> If you have a few seconds, [a star on GitHub helps us a lot](https://github.com/aperio-search/aperio)!
 
 Aperio is an screamingly fast search engine designed to use minimal resource consumption. To maintain this extreme efficiency and high throughput, Aperio bypasses heavy, resource-intensive features in favor of a lean architecture:
 

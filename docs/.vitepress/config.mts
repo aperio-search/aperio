@@ -41,7 +41,7 @@ export default defineConfig({
         '© 2026 <a href="https://github.com/andresribeiro">André Ribeiro</a>',
     },
     socialLinks: [
-      { icon: "github", link: "https://github.com/andresribeiro/aperio" },
+      { icon: "github", link: "https://github.com/aperio-search/aperio" },
     ],
   },
 });
