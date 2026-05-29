@@ -59,3 +59,124 @@ fn parse_compression(s: &str) -> Option<fjall::CompressionType> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_none_path() {
+        let cfg = AppConfig::load(None);
+        assert!(cfg.min_token_length.is_none());
+        assert!(cfg.max_shard_size.is_none());
+        assert!(cfg.max_roaring_shard_size.is_none());
+    }
+
+    #[test]
+    fn load_invalid_path() {
+        let cfg = AppConfig::load(Some(std::path::Path::new("/nonexistent/config.toml")));
+        assert!(cfg.min_token_length.is_none());
+    }
+
+    #[test]
+    fn load_valid_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+min_token_length = 3
+max_shard_size = 500
+max_roaring_shard_size = 50000
+block_cache_size = 67108864
+write_buffer_size = 16777216
+maintenance_threads = 2
+compression = "lz4"
+log_level = "debug"
+"#,
+        )
+        .unwrap();
+        let cfg = AppConfig::load(Some(&path));
+        assert_eq!(cfg.min_token_length, Some(3));
+        assert_eq!(cfg.max_shard_size, Some(500));
+        assert_eq!(cfg.max_roaring_shard_size, Some(50000));
+        assert_eq!(cfg.block_cache_size, Some(67108864));
+        assert_eq!(cfg.write_buffer_size, Some(16777216));
+        assert_eq!(cfg.maintenance_threads, Some(2));
+        assert_eq!(cfg.compression.as_deref(), Some("lz4"));
+        assert_eq!(cfg.log_level.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn load_partial_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, r#"min_token_length = 5"#).unwrap();
+        let cfg = AppConfig::load(Some(&path));
+        assert_eq!(cfg.min_token_length, Some(5));
+        assert!(cfg.max_shard_size.is_none());
+    }
+
+    #[test]
+    fn load_invalid_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "not valid toml {{{").unwrap();
+        let cfg = AppConfig::load(Some(&path));
+        assert!(cfg.min_token_length.is_none());
+    }
+
+    #[test]
+    fn merge_defaults() {
+        let store_cfg = AppConfig::default().merge_into_store_config();
+        assert_eq!(store_cfg.min_token_length, 2);
+        assert_eq!(store_cfg.max_shard_size, 1000);
+        assert_eq!(store_cfg.max_roaring_shard_size, 100_000);
+        assert!(store_cfg.write_buffer_size.is_none());
+        assert!(store_cfg.compression.is_none());
+    }
+
+    #[test]
+    fn merge_overrides() {
+        let app_cfg = AppConfig {
+            min_token_length: Some(5),
+            max_shard_size: Some(200),
+            max_roaring_shard_size: Some(50_000),
+            write_buffer_size: Some(8_000_000),
+            compression: Some("lz4".into()),
+            block_cache_size: None,
+            maintenance_threads: None,
+            log_level: None,
+        };
+        let store_cfg = app_cfg.merge_into_store_config();
+        assert_eq!(store_cfg.min_token_length, 5);
+        assert_eq!(store_cfg.max_shard_size, 200);
+        assert_eq!(store_cfg.max_roaring_shard_size, 50_000);
+        assert_eq!(store_cfg.write_buffer_size, Some(8_000_000));
+        assert_eq!(store_cfg.compression, Some(fjall::CompressionType::Lz4));
+    }
+
+    #[test]
+    fn parse_compression_none() {
+        let result = parse_compression("none");
+        assert_eq!(result, Some(fjall::CompressionType::None));
+    }
+
+    #[test]
+    fn parse_compression_lz4() {
+        let result = parse_compression("lz4");
+        assert_eq!(result, Some(fjall::CompressionType::Lz4));
+    }
+
+    #[test]
+    fn parse_compression_unknown() {
+        let result = parse_compression("zstd");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_compression_case_insensitive() {
+        let result = parse_compression("LZ4");
+        assert_eq!(result, Some(fjall::CompressionType::Lz4));
+    }
+}
