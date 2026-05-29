@@ -238,11 +238,13 @@ impl Store {
         let mut indices: Vec<usize> = Vec::new();
         for guard in inverted.prefix(&prefix) {
             let (key, _) = guard.into_inner()?;
-            let key_str = String::from_utf8_lossy(&key);
-            if let Some(idx_str) = key_str.rsplit(SHARD_DELIM).next() {
-                if let Ok(idx) = idx_str.parse::<usize>() {
-                    indices.push(idx);
+            if let Some(null_pos) = key.iter().rposition(|&b| b == SHARD_DELIM as u8) {
+                let digit_bytes = &key[null_pos + 1..];
+                let mut idx = 0;
+                for &b in digit_bytes {
+                    idx = idx * 10 + (b - b'0') as usize;
                 }
+                indices.push(idx);
             }
         }
         indices.sort_unstable();
