@@ -538,15 +538,14 @@ impl Store {
         };
 
         let after_val = after.and_then(|a| a.parse::<u64>().ok());
-        let mut ids: Vec<u64> = bitmap.into_iter().collect();
-        if sort_desc {
-            ids.sort_unstable_by(|a, b| b.cmp(a));
+        let iter: Box<dyn Iterator<Item = u64>> = if sort_desc {
+            Box::new(bitmap.into_iter().rev())
         } else {
-            ids.sort_unstable();
-        }
+            Box::new(bitmap.into_iter())
+        };
 
         let mut results: Vec<String> = Vec::with_capacity(take);
-        for id in ids {
+        for id in iter {
             if let Some(cursor) = after_val {
                 if sort_desc && id >= cursor {
                     continue;
