@@ -1173,3 +1173,443 @@ impl WordIterState {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_store(conf: StoreConfig) -> (Store, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = fjall::Database::builder(dir.path())
+            .cache_size(1_000_000)
+            .open()
+            .unwrap();
+        let store = Store::with_config(db, conf);
+        (store, dir)
+    }
+
+    fn default_store() -> (Store, tempfile::TempDir) {
+        test_store(StoreConfig::default())
+    }
+
+    #[test]
+    fn tokenize_basic() {
+        let config = StoreConfig::default();
+        let tokens = Store::tokenize("hello world", &config);
+        let mut sorted: Vec<_> = tokens.into_iter().collect();
+        sorted.sort();
+        assert_eq!(sorted, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn tokenize_deduplicates() {
+        let config = StoreConfig::default();
+        let tokens = Store::tokenize("foo foo foo", &config);
+        assert_eq!(tokens.len(), 1);
+        assert!(tokens.contains("foo"));
+    }
+
+    #[test]
+    fn tokenize_short_words_filtered() {
+        let config = StoreConfig { min_token_length: 3, ..Default::default() };
+        let tokens = Store::tokenize("a an the fox", &config);
+        assert_eq!(tokens.len(), 2);
+        assert!(tokens.contains("the"));
+        assert!(tokens.contains("fox"));
+    }
+
+    #[test]
+    fn tokenize_empty() {
+        let config = StoreConfig::default();
+        let tokens = Store::tokenize("", &config);
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn tokenize_only_short() {
+        let config = StoreConfig { min_token_length: 10, ..Default::default() };
+        let tokens = Store::tokenize("hello world", &config);
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn shard_key_format() {
+        let key = Store::shard_key("hello", 42);
+        assert_eq!(key, b"hello\x000042");
+    }
+
+    #[test]
+    fn shard_key_zero_padded() {
+        let key = Store::shard_key("test", 0);
+        assert_eq!(key, b"test\x000000");
+        let key = Store::shard_key("test", 9999);
+        assert_eq!(key, b"test\x009999");
+    }
+
+    #[test]
+    fn id_type_serde_roundtrip() {
+        for id_type in &[IdType::String, IdType::Number] {
+            let json = serde_json::to_string(id_type).unwrap();
+            let back: IdType = serde_json::from_str(&json).unwrap();
+            assert_eq!(*id_type, back);
+        }
+    }
+
+    #[test]
+    fn id_type_string_serde_name() {
+        let json = serde_json::to_string(&IdType::String).unwrap();
+        assert_eq!(json, "\"string\"");
+        let json = serde_json::to_string(&IdType::Number).unwrap();
+        assert_eq!(json, "\"number\"");
+    }
+
+    #[test]
+    fn store_config_defaults() {
+        let cfg = StoreConfig::default();
+        assert_eq!(cfg.min_token_length, 2);
+        assert_eq!(cfg.max_shard_size, 1000);
+        assert_eq!(cfg.max_roaring_shard_size, 100_000);
+        assert!(cfg.write_buffer_size.is_none());
+        assert!(cfg.compression.is_none());
+    }
+
+    #[test]
+    fn create_and_list_collections() {
+        let (store, _dir) = default_store();
+        store.create_collection("mycol", "string").unwrap();
+        let list = store.list_collections().unwrap();
+        assert_eq!(list.collections.len(), 1);
+        assert_eq!(list.collections[0].name, "mycol");
+        assert_eq!(list.collections[0].id_type, "string");
+    }
+
+    #[test]
+    fn create_multiple_collections() {
+        let (store, _dir) = default_store();
+        store.create_collection("a", "string").unwrap();
+        store.create_collection("b", "number").unwrap();
+        let list = store.list_collections().unwrap();
+        assert_eq!(list.collections.len(), 2);
+    }
+
+    #[test]
+    fn create_duplicate_collection_errors() {
+        let (store, _dir) = default_store();
+        store.create_collection("mycol", "string").unwrap();
+        let err = store.create_collection("mycol", "string").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn create_invalid_id_type_errors() {
+        let (store, _dir) = default_store();
+        let err = store.create_collection("mycol", "invalid").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn upsert_and_search_string() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results, vec!["1"]);
+    }
+
+    #[test]
+    fn upsert_and_search_number() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number").unwrap();
+        store.upsert("docs", "42", "hello world").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results, vec!["42"]);
+    }
+
+    #[test]
+    fn search_multi_token_intersection() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "apple banana").unwrap();
+        store.upsert("docs", "2", "apple cherry").unwrap();
+        store.upsert("docs", "3", "banana cherry").unwrap();
+        // both "apple" and "banana" -> only doc 1
+        let results = store.search("docs", "apple banana", false, 10, None).unwrap();
+        assert_eq!(results, vec!["1"]);
+    }
+
+    #[test]
+    fn search_no_match() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        let results = store.search("docs", "nonexistent", false, 10, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_empty_query() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        let results = store.search("docs", "", false, 10, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_sort_asc() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "b", "hello").unwrap();
+        store.upsert("docs", "a", "hello").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        // asc: a then b
+        assert_eq!(results, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn search_sort_desc_default() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "a", "hello").unwrap();
+        store.upsert("docs", "b", "hello").unwrap();
+        let results = store.search("docs", "hello", true, 10, None).unwrap();
+        // desc: b then a
+        assert_eq!(results, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn search_pagination_after() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "a", "hello").unwrap();
+        store.upsert("docs", "b", "hello").unwrap();
+        store.upsert("docs", "c", "hello").unwrap();
+        // After "a" -> should skip "a", get "b", "c"
+        let results = store.search("docs", "hello", false, 10, Some("a")).unwrap();
+        assert_eq!(results, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn search_pagination_after_desc() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "a", "hello").unwrap();
+        store.upsert("docs", "b", "hello").unwrap();
+        store.upsert("docs", "c", "hello").unwrap();
+        let results = store.search("docs", "hello", true, 10, Some("c")).unwrap();
+        assert_eq!(results, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn search_take_limit() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "a", "hello").unwrap();
+        store.upsert("docs", "b", "hello").unwrap();
+        store.upsert("docs", "c", "hello").unwrap();
+        let results = store.search("docs", "hello", false, 2, None).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn upsert_update_reindex() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "apple banana").unwrap();
+        store.upsert("docs", "1", "apple cherry").unwrap();
+        // "banana" removed from index
+        let r1 = store.search("docs", "banana", false, 10, None).unwrap();
+        assert!(r1.is_empty());
+        // "cherry" now indexed
+        let r2 = store.search("docs", "cherry", false, 10, None).unwrap();
+        assert_eq!(r2, vec!["1"]);
+        // "apple" still present
+        let r3 = store.search("docs", "apple", false, 10, None).unwrap();
+        assert_eq!(r3, vec!["1"]);
+    }
+
+    #[test]
+    fn delete_item() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        store.delete_item("docs", "1").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn delete_nonexistent_item_errors() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        let err = store.delete_item("docs", "1").unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn delete_and_reinsert() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.delete_item("docs", "1").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results, vec!["1"]);
+    }
+
+    #[test]
+    fn suggest_basic() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        store.upsert("docs", "2", "helpful tips").unwrap();
+        let suggestions = store.suggest("docs", "hel").unwrap();
+        assert!(suggestions.contains(&"helpful".to_string()));
+        assert!(suggestions.contains(&"hello".to_string()));
+    }
+
+    #[test]
+    fn suggest_no_matches() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        let suggestions = store.suggest("docs", "xyz").unwrap();
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn suggest_on_nonexistent_collection() {
+        let (store, _dir) = default_store();
+        let err = store.suggest("nonexistent", "hel").unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn collection_info() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello world").unwrap();
+        let info = store.collection_info("docs").unwrap();
+        assert_eq!(info.name, "docs");
+        assert_eq!(info.id_type, "string");
+        assert_eq!(info.document_count, 1);
+        assert_eq!(info.unique_terms, 2);
+    }
+
+    #[test]
+    fn collection_info_empty() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        let info = store.collection_info("docs").unwrap();
+        assert_eq!(info.document_count, 0);
+        assert_eq!(info.unique_terms, 0);
+    }
+
+    #[test]
+    fn delete_collection() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.delete_collection("docs").unwrap();
+        let list = store.list_collections().unwrap();
+        assert!(list.collections.is_empty());
+    }
+
+    #[test]
+    fn search_on_nonexistent_collection() {
+        let (store, _dir) = default_store();
+        let err = store.search("nonexistent", "hello", false, 10, None).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn upsert_on_nonexistent_collection() {
+        let (store, _dir) = default_store();
+        let err = store.upsert("nonexistent", "1", "hello").unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn upsert_invalid_numeric_id() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number").unwrap();
+        let err = store.upsert("docs", "not-a-number", "hello").unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn search_number_sort_asc() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number").unwrap();
+        store.upsert("docs", "3", "hello").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.upsert("docs", "2", "hello").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn search_number_sort_desc() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.upsert("docs", "2", "hello").unwrap();
+        let results = store.search("docs", "hello", true, 10, None).unwrap();
+        assert_eq!(results, vec!["2", "1"]);
+    }
+
+    #[test]
+    fn search_number_pagination() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.upsert("docs", "2", "hello").unwrap();
+        store.upsert("docs", "3", "hello").unwrap();
+        let results = store.search("docs", "hello", false, 10, Some("1")).unwrap();
+        assert_eq!(results, vec!["2", "3"]);
+    }
+
+    #[test]
+    fn upsert_string_idempotent() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.upsert("docs", "1", "hello").unwrap(); // same content, no-op
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results, vec!["1"]);
+    }
+
+    #[test]
+    fn upsert_number_idempotent() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        store.upsert("docs", "1", "hello").unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results, vec!["1"]);
+    }
+
+    #[test]
+    fn shard_splitting_string() {
+        let conf = StoreConfig { max_shard_size: 3, ..Default::default() };
+        let (store, _dir) = test_store(conf);
+        store.create_collection("docs", "string").unwrap();
+        for i in 0..10u64 {
+            store.upsert("docs", &i.to_string(), "hello").unwrap();
+        }
+        let results = store.search("docs", "hello", false, 20, None).unwrap();
+        assert_eq!(results.len(), 10);
+    }
+
+    #[test]
+    fn shard_splitting_roaring() {
+        let conf = StoreConfig { max_roaring_shard_size: 3, ..Default::default() };
+        let (store, _dir) = test_store(conf);
+        store.create_collection("docs", "number").unwrap();
+        for i in 0..10u64 {
+            store.upsert("docs", &i.to_string(), "hello").unwrap();
+        }
+        let results = store.search("docs", "hello", false, 20, None).unwrap();
+        assert_eq!(results.len(), 10);
+    }
+}

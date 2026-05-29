@@ -15,6 +15,9 @@ src/
   config.rs     — optional TOML config file parsing
   routes.rs     — Axum router with REST endpoints
   store.rs      — core engine: tokenization, inverted index, two ID strategies
+tests/
+  store.rs      — store integration tests (real fjall DB in tempdir)
+  api.rs        — HTTP API integration tests via tower::ServiceExt
 ```
 
 ## Commands
@@ -23,7 +26,11 @@ src/
 cargo check              # compile-check only (fastest feedback)
 cargo clippy             # lint (no custom config, uses defaults)
 cargo fmt                # format (no custom config, uses rustfmt defaults)
-cargo test               # runs — but there are zero tests in the codebase
+cargo test               # runs all tests (unit + integration)
+cargo test --lib         # unit tests only
+cargo test --test api    # HTTP API integration tests only
+cargo test --test store  # store integration tests only
+cargo test <test_name>   # single test by name
 cargo run                # dev server on :3000 (data persists to ./data/aperio.db)
 cargo run --release      # optimized build
 ```
@@ -81,4 +88,27 @@ When adding, removing, or modifying any config option in `src/config.rs`, update
 
 ## What is NOT present
 
-No CI workflows, no pre-commit hooks, no linter/formatter config files beyond defaults. No integration tests, no benchmarks. No generated code or codegen steps. No database migrations.
+No CI workflows, no pre-commit hooks, no linter/formatter config files beyond defaults. No benchmarks. No generated code or codegen steps. No database migrations.
+
+## Testing
+
+Tests live in two places:
+
+- **Unit tests** — `#[cfg(test)] mod tests` blocks at the bottom of `src/config.rs`, `src/error.rs`, `src/models.rs`, and `src/store.rs`.
+- **Integration tests** — standalone files in `tests/`.
+
+All tests use the same dev-dependencies:
+
+| Crate | Purpose |
+|---|---|
+| `tempfile` | Temporary directories for DB-backed store tests |
+| `pretty_assertions` | Nicer assertion diffs |
+| `tower` | `ServiceExt::oneshot` for HTTP test requests |
+| `http-body-util` | Response body reading in error unit tests |
+
+Key patterns:
+
+- **Store unit tests** create a real `fjall::Database` in a `tempfile::TempDir` and construct a `Store` with it. The `TempDir` is kept alive alongside the `Store` so it isn't dropped early.
+- **API tests** use `tower::ServiceExt::oneshot` on a cloned `axum::Router` (the router is cheap to clone; `oneshot` takes ownership).
+- **Config tests** use `tempfile::NamedTempFile` to exercise the file-read path.
+- **Error tests** use `tokio::runtime::Runtime::new().block_on()` to read response bodies synchronously.

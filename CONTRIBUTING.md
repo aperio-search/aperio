@@ -14,11 +14,15 @@ cargo check
 ## Development Workflow
 
 ```sh
-cargo check       # compile-check (fastest feedback)
-cargo clippy      # lint (uses default config)
-cargo fmt         # format (uses rustfmt defaults)
-cargo test        # run tests
-cargo run         # dev server on :3000, data persists to ./data/aperio.db
+cargo check              # compile-check (fastest feedback)
+cargo clippy             # lint (uses default config)
+cargo fmt                # format (uses rustfmt defaults)
+cargo test               # run all tests (unit + integration)
+cargo test --lib         # unit tests only
+cargo test --test api    # HTTP API integration tests only
+cargo test --test store  # store integration tests only
+cargo test <test_name>   # single test by name
+cargo run                # dev server on :3000, data persists to ./data/aperio.db
 ```
 
 ### Runtime Configuration
@@ -56,6 +60,9 @@ src/
   config.rs     — optional TOML config parsing
   routes.rs     — Axum router with REST endpoints
   store.rs      — core engine: tokenization, inverted index, two ID strategies
+tests/
+  store.rs      — store integration tests (real fjall DB in tempdir)
+  api.rs        — HTTP API integration tests via tower::ServiceExt
 ```
 
 See `AGENTS.md` for more detailed internals documentation.
