@@ -8,7 +8,9 @@ use roaring::{MultiOps, RoaringTreemap};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::models::{CollectionCreated, CollectionInfo};
+use crate::models::{
+    CollectionCreated, CollectionInfo, CollectionSummary, ListCollectionsResponse,
+};
 
 const SHARD_DELIM: char = '\0';
 
@@ -1081,6 +1083,18 @@ impl Store {
             document_count: docs.len()?,
             unique_terms,
         })
+    }
+
+    pub fn list_collections(&self) -> Result<ListCollectionsResponse, AppError> {
+        let map = self.collections.read().unwrap();
+        let collections: Vec<CollectionSummary> = map
+            .iter()
+            .map(|(name, id_type)| CollectionSummary {
+                name: name.clone(),
+                id_type: format!("{:?}", id_type).to_lowercase(),
+            })
+            .collect();
+        Ok(ListCollectionsResponse { collections })
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {

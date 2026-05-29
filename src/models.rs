@@ -54,3 +54,14 @@ pub struct CollectionInfo {
     pub document_count: usize,
     pub unique_terms: usize,
 }
+
+#[derive(Serialize)]
+pub struct CollectionSummary {
+    pub name: String,
+    pub id_type: String,
+}
+
+#[derive(Serialize)]
+pub struct ListCollectionsResponse {
+    pub collections: Vec<CollectionSummary>,
+}
