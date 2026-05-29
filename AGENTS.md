@@ -73,7 +73,7 @@ Root: **Elastic License** (not MIT). `docs/` is MIT.
 - **Never commit to `main`.** All work must be done on a feature branch.
 - After making changes, always open a PR (via `gh pr create`).
 - After the PR is opened, **ask the user** whether to merge it to `main`.
-- When committing (e.g., after merging), **always keep the PR number** (e.g., `(#2)`) in the commit message. Don't remove it.
+- Do **not** manually include the PR number (e.g., `(#2)`) in branch commits. When you merge via GitHub or `gh pr merge`, the PR number is appended automatically. Adding it manually on the branch causes duplication like `(#5) (#5)`.
 
 ## What is NOT present
 
