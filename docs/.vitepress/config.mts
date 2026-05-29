@@ -42,6 +42,7 @@ export default defineConfig({
     },
     socialLinks: [
       { icon: "github", link: "https://github.com/aperio-search/aperio" },
+      { icon: "x", link: "https://x.com/aperiosearch" },
     ],
   },
 });
