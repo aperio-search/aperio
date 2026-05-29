@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use crate::store::StoreConfig;
@@ -14,6 +16,7 @@ pub struct AppConfig {
     pub maintenance_threads: Option<usize>,
     pub compression: Option<String>,
     pub log_level: Option<String>,
+    pub index_interval_ms: Option<u64>,
 }
 
 impl AppConfig {
@@ -45,6 +48,7 @@ impl AppConfig {
             max_roaring_shard_size: self.max_roaring_shard_size.unwrap_or(100_000),
             write_buffer_size: self.write_buffer_size,
             compression: self.compression.and_then(|s| parse_compression(&s)),
+            index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
         }
     }
 }
@@ -93,6 +97,7 @@ write_buffer_size = 16777216
 maintenance_threads = 2
 compression = "lz4"
 log_level = "debug"
+index_interval_ms = 500
 "#,
         )
         .unwrap();
@@ -105,6 +110,7 @@ log_level = "debug"
         assert_eq!(cfg.maintenance_threads, Some(2));
         assert_eq!(cfg.compression.as_deref(), Some("lz4"));
         assert_eq!(cfg.log_level.as_deref(), Some("debug"));
+        assert_eq!(cfg.index_interval_ms, Some(500));
     }
 
     #[test]
@@ -134,6 +140,7 @@ log_level = "debug"
         assert_eq!(store_cfg.max_roaring_shard_size, 100_000);
         assert!(store_cfg.write_buffer_size.is_none());
         assert!(store_cfg.compression.is_none());
+        assert_eq!(store_cfg.index_interval, Duration::from_millis(900));
     }
 
     #[test]
@@ -144,6 +151,7 @@ log_level = "debug"
             max_roaring_shard_size: Some(50_000),
             write_buffer_size: Some(8_000_000),
             compression: Some("lz4".into()),
+            index_interval_ms: Some(300),
             block_cache_size: None,
             maintenance_threads: None,
             log_level: None,
@@ -154,6 +162,7 @@ log_level = "debug"
         assert_eq!(store_cfg.max_roaring_shard_size, 50_000);
         assert_eq!(store_cfg.write_buffer_size, Some(8_000_000));
         assert_eq!(store_cfg.compression, Some(fjall::CompressionType::Lz4));
+        assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
     }
 
     #[test]

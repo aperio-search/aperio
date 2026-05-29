@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
+use std::time::Duration;
 
 use charabia::Tokenize;
 use fjall::Slice;
@@ -50,6 +52,7 @@ pub struct StoreConfig {
     pub max_roaring_shard_size: u64,
     pub write_buffer_size: Option<u64>,
     pub compression: Option<fjall::CompressionType>,
+    pub index_interval: Duration,
 }
 
 impl Default for StoreConfig {
@@ -60,6 +63,7 @@ impl Default for StoreConfig {
             max_roaring_shard_size: 100_000,
             write_buffer_size: None,
             compression: None,
+            index_interval: Duration::from_millis(900),
         }
     }
 }
@@ -102,11 +106,20 @@ struct PostingShard {
     ids: Vec<String>,
 }
 
+#[derive(Archive, RkyvSerialize, RkyvDeserialize)]
+struct QueuedIndex {
+    collection: String,
+    id: String,
+    content: String,
+}
+
 pub struct Store {
     db: fjall::Database,
     config: StoreConfig,
     lock: Mutex<()>,
     collections: RwLock<HashMap<String, IdType>>,
+    next_seq: AtomicU64,
+    background_active: AtomicBool,
 }
 
 impl Store {
@@ -129,12 +142,37 @@ impl Store {
             }
             map
         };
+        let next_seq = Self::init_next_seq(&db, &config);
+
         Self {
             db,
             config,
             lock: Mutex::new(()),
             collections: RwLock::new(collections),
+            next_seq: AtomicU64::new(next_seq),
+            background_active: AtomicBool::new(false),
         }
+    }
+
+    fn init_next_seq(db: &fjall::Database, config: &StoreConfig) -> u64 {
+        let queue = match db.keyspace("_index_queue", || config.keyspace_opts()) {
+            Ok(q) => q,
+            Err(_) => return 1,
+        };
+        let mut max = 0u64;
+        for guard in queue.iter() {
+            if let Ok((key, _)) = guard.into_inner()
+                && key.len() == 8
+            {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&key);
+                let seq = u64::from_be_bytes(buf);
+                if seq > max {
+                    max = seq;
+                }
+            }
+        }
+        max + 1
     }
 
     fn inverted_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
@@ -151,6 +189,16 @@ impl Store {
         Ok(self
             .db
             .keyspace("_collections", || self.config.keyspace_opts())?)
+    }
+
+    fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
+        Ok(self
+            .db
+            .keyspace("_index_queue", || self.config.keyspace_opts())?)
+    }
+
+    fn allocate_seq(&self) -> u64 {
+        self.next_seq.fetch_add(1, Ordering::Relaxed)
     }
 
     fn validate_collection_exists(&self, collection: &str) -> Result<IdType, AppError> {
@@ -577,7 +625,7 @@ impl Store {
         Ok(results)
     }
 
-    pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
+    fn upsert_internal(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
         let id_type = self.validate_collection_exists(collection)?;
         let id_u64 = match id_type {
             IdType::Number => Some(id.parse::<u64>().map_err(|_| {
@@ -627,6 +675,84 @@ impl Store {
         docs.insert(id.as_bytes(), encode_rkyv!(&tokens)?)?;
         tracing::debug!(collection = %collection, id = %id, tokens = tokens.len(), "item upserted");
         Ok(())
+    }
+
+    pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
+        let id_type = self.validate_collection_exists(collection)?;
+        match id_type {
+            IdType::Number => {
+                id.parse::<u64>().map_err(|_| {
+                    AppError::BadRequest(format!(
+                        "invalid id '{}': collection '{}' expects numeric ids",
+                        id, collection
+                    ))
+                })?;
+            }
+            IdType::String => {}
+        }
+
+        if !self.background_active.load(Ordering::Acquire) {
+            return self.upsert_internal(collection, id, content);
+        }
+
+        let seq = self.allocate_seq();
+        let queue = self.queue_keyspace()?;
+        let entry = QueuedIndex {
+            collection: collection.to_string(),
+            id: id.to_string(),
+            content: content.to_string(),
+        };
+        queue.insert(seq.to_be_bytes(), &encode_rkyv!(&entry)?)?;
+        tracing::debug!(collection = %collection, id = %id, seq = %seq, "item queued for indexing");
+        Ok(())
+    }
+
+    pub fn process_pending_queue(&self) -> Result<(), AppError> {
+        let queue = self.queue_keyspace()?;
+        let mut batch: Vec<(Vec<u8>, QueuedIndex)> = Vec::new();
+
+        for guard in queue.iter() {
+            let (key, value) = guard.into_inner()?;
+            if key.len() == 8
+                && let Ok(entry) = decode_rkyv!(QueuedIndex, &value)
+            {
+                batch.push((key.to_vec(), entry));
+            }
+        }
+
+        for (key, entry) in &batch {
+            if let Err(e) = self.upsert_internal(&entry.collection, &entry.id, &entry.content) {
+                tracing::error!(
+                    error = ?e,
+                    collection = %entry.collection,
+                    id = %entry.id,
+                    "failed to index queued item"
+                );
+            }
+            queue.remove(key)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn flush(&self) -> Result<(), AppError> {
+        self.process_pending_queue()
+    }
+
+    pub fn spawn_background(self: &std::sync::Arc<Self>) {
+        self.background_active.store(true, Ordering::Release);
+        let store = std::sync::Arc::clone(self);
+        let interval = self.config.index_interval;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                if let Err(e) = store.process_pending_queue() {
+                    tracing::error!(error = ?e, "background indexing cycle failed");
+                }
+            }
+        });
     }
 
     pub fn search(
@@ -1036,6 +1162,9 @@ impl Store {
     }
 
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
+        if self.background_active.load(Ordering::Acquire) {
+            self.process_pending_queue()?;
+        }
         let id_type = self.validate_collection_exists(collection)?;
         let id_u64 = match id_type {
             IdType::Number => Some(id.parse::<u64>().map_err(|_| {
