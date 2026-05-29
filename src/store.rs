@@ -41,6 +41,8 @@ pub struct StoreConfig {
     pub min_token_length: usize,
     pub max_shard_size: usize,
     pub max_roaring_shard_size: u64,
+    pub write_buffer_size: Option<u64>,
+    pub compression: Option<fjall::CompressionType>,
 }
 
 impl Default for StoreConfig {
@@ -49,7 +51,24 @@ impl Default for StoreConfig {
             min_token_length: 2,
             max_shard_size: 1000,
             max_roaring_shard_size: 100_000,
+            write_buffer_size: None,
+            compression: None,
         }
+    }
+}
+
+impl StoreConfig {
+    fn keyspace_opts(&self) -> fjall::KeyspaceCreateOptions {
+        let mut opts = fjall::KeyspaceCreateOptions::default();
+        if let Some(size) = self.write_buffer_size {
+            opts = opts.max_memtable_size(size);
+        }
+        if let Some(comp) = self.compression {
+            opts = opts.data_block_compression_policy(
+                fjall::config::CompressionPolicy::all(comp),
+            );
+        }
+        opts
     }
 }
 
@@ -82,7 +101,7 @@ impl Store {
     pub fn with_config(db: fjall::Database, config: StoreConfig) -> Self {
         let collections = {
             let mut map = HashMap::new();
-            if let Ok(meta) = db.keyspace("_collections", fjall::KeyspaceCreateOptions::default) {
+            if let Ok(meta) = db.keyspace("_collections", || config.keyspace_opts()) {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
                         let name = String::from_utf8_lossy(&key).to_string();
@@ -106,16 +125,16 @@ impl Store {
 
     fn inverted_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.inverted", collection);
-        Ok(self.db.keyspace(&name, fjall::KeyspaceCreateOptions::default)?)
+        Ok(self.db.keyspace(&name, || self.config.keyspace_opts())?)
     }
 
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.docs", collection);
-        Ok(self.db.keyspace(&name, fjall::KeyspaceCreateOptions::default)?)
+        Ok(self.db.keyspace(&name, || self.config.keyspace_opts())?)
     }
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
-        Ok(self.db.keyspace("_collections", fjall::KeyspaceCreateOptions::default)?)
+        Ok(self.db.keyspace("_collections", || self.config.keyspace_opts())?)
     }
 
     fn validate_collection_exists(&self, collection: &str) -> Result<IdType, AppError> {
@@ -153,8 +172,6 @@ impl Store {
 
             map.insert(name.to_string(), id_type_enum);
         }
-
-        self.db.persist(fjall::PersistMode::SyncData)?;
 
         Ok(CollectionCreated {
             name: name.to_string(),
@@ -576,8 +593,6 @@ impl Store {
             id.as_bytes(),
             encode_rkyv!(&tokens)?,
         )?;
-
-        self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())
     }
 
@@ -921,8 +936,6 @@ impl Store {
         }
 
         docs.remove(id.as_bytes())?;
-
-        self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())
     }
 
@@ -956,19 +969,17 @@ impl Store {
 
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
-            let inv = self.db.keyspace(&inv_name, fjall::KeyspaceCreateOptions::default)?;
+            let inv = self.db.keyspace(&inv_name, || self.config.keyspace_opts())?;
             self.db.delete_keyspace(inv)?;
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
-            let docs = self.db.keyspace(&docs_name, fjall::KeyspaceCreateOptions::default)?;
+            let docs = self.db.keyspace(&docs_name, || self.config.keyspace_opts())?;
             self.db.delete_keyspace(docs)?;
         }
 
         let meta = self.meta_keyspace()?;
         meta.remove(collection.as_bytes())?;
-
-        self.db.persist(fjall::PersistMode::SyncData)?;
         Ok(())
     }
 }
