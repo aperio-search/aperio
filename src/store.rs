@@ -4,7 +4,7 @@ use std::sync::{Mutex, RwLock};
 use charabia::Tokenize;
 use fjall::Slice;
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
-use roaring::RoaringTreemap;
+use roaring::{MultiOps, RoaringTreemap};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
@@ -519,7 +519,7 @@ impl Store {
             return Ok(Vec::new());
         }
 
-        let mut result: Option<RoaringTreemap> = None;
+        let mut word_bitmaps: Vec<RoaringTreemap> = Vec::with_capacity(word_shards.len());
         for (word, indices) in &word_shards {
             let mut word_bitmap = RoaringTreemap::new();
             for &shard_idx in indices {
@@ -530,16 +530,10 @@ impl Store {
                     }
                 }
             }
-            result = match result {
-                None => Some(word_bitmap),
-                Some(r) => Some(&r & &word_bitmap),
-            };
+            word_bitmaps.push(word_bitmap);
         }
 
-        let bitmap = match result {
-            Some(b) => b,
-            None => return Ok(Vec::new()),
-        };
+        let bitmap = word_bitmaps.iter().intersection();
 
         let after_val = after.and_then(|a| a.parse::<u64>().ok());
         let iter: Box<dyn Iterator<Item = u64>> = if sort_desc {
