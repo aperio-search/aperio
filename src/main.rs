@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use aster::{config::AppConfig, routes, store::Store};
+use aperio::{config::AppConfig, routes, store::Store};
 
 #[tokio::main]
 async fn main() {
     let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let db_path = PathBuf::from(&data_dir).join("aster.db");
+    let db_path = PathBuf::from(&data_dir).join("aperio.db");
 
     let config = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
     let app_config = AppConfig::load(config.as_deref());

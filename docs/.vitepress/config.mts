@@ -2,7 +2,7 @@ import { defineConfig } from "vitepress";
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: "Aster",
+  title: "Aperio",
   description: "Screamingly fast, ultra-lean search engine.",
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
@@ -41,7 +41,7 @@ export default defineConfig({
         '© 2026 <a href="https://github.com/andresribeiro">André Ribeiro</a>',
     },
     socialLinks: [
-      { icon: "github", link: "https://github.com/andresribeiro/aster" },
+      { icon: "github", link: "https://github.com/andresribeiro/aperio" },
     ],
   },
 });

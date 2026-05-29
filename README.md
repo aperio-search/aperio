@@ -1,18 +1,18 @@
-# Aster
+# Aperio
 
 [![License](https://img.shields.io/badge/license-Elastic-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
 An extremely lightweight search engine, heavy optimized for SSDs, built on Rust and Sled.
 
-Aster organizes search terms into isolated collections (e.g., `posts` for a blog, or `user_messages:1` for specific user data). It is designed for high-throughput, simple full-text search indexing without the overhead of heavy, external search clusters.
+Aperio organizes search terms into isolated collections (e.g., `posts` for a blog, or `user_messages:1` for specific user data). It is designed for high-throughput, simple full-text search indexing without the overhead of heavy, external search clusters.
 
 - **Lightweight:** Minimal memory footprint, running entirely embedded within your application environment.
 - **No Complex Querying:** No filtering, complex aggregations, or heavy boolean logic—just pure, blazing-fast term matching.
 - **Sorted Out-of-the-Box:** Results are sorted by document ID (lexicographically). Defaulting to `DESC`, with optional `ASC` retrieval.
 - **Disk-Backed Storage:** Leveraging `sled` for zero-copy, concurrent, thread-safe transactional key-value storage.
 
-> Aster is highly optimized for SSDs as it stores all data on disk. Running Aster on a traditional HDD will result in severely degraded search performance.
+> Aperio is highly optimized for SSDs as it stores all data on disk. Running Aperio on a traditional HDD will result in severely degraded search performance.
 
 ## Table of Contents
 
@@ -26,16 +26,16 @@ Aster organizes search terms into isolated collections (e.g., `posts` for a blog
 
 ## Architecture
 
-Aster utilizes a two-layer key-value layout inside `sled` to handle inversion and retrieval:
+Aperio utilizes a two-layer key-value layout inside `sled` to handle inversion and retrieval:
 
 1. **Inverted Index Store:** Maps individual tokens/words to an ascending list of document IDs (`word -> [id1, id2, ...]`).
 2. **Token Store:** Maps the original document ID to its pre-computed token array (`id -> ["rust", "sled", ...]`), used for efficient cleanups and deletions without re-tokenizing.
 
-When an item is deleted, Aster reads the stored token set, purges the ID from the Inverted Index for each token, and finally drops the item from the Token Store.
+When an item is deleted, Aperio reads the stored token set, purges the ID from the Inverted Index for each token, and finally drops the item from the Token Store.
 
 ### Tokenization & Normalization
 
-Aster processes text through two stages before indexing and searching:
+Aperio processes text through two stages before indexing and searching:
 
 1. **Normalization:** Applies Unicode NFKD decomposition (e.g., `é` → `e` + combining accent), strips combining marks, lowercases the result, and removes non-alphanumeric characters. This makes searches case-insensitive and accent-insensitive, and ensures punctuation like `"hello,"` matches `"hello"`.
 
@@ -57,7 +57,7 @@ Collections allow you to partition data logically. You can name collections stat
 
 ### Document ID Recommendation
 
-Because Aster sorts results by your provided document IDs, using **lexicographically sortable IDs** (such as `ULID`, `UUIDv7`, or zero-padded integers like `000001`) is highly recommended to ensure predictable `ASC`/`DESC` ordering and maximum performance.
+Because Aperio sorts results by your provided document IDs, using **lexicographically sortable IDs** (such as `ULID`, `UUIDv7`, or zero-padded integers like `000001`) is highly recommended to ensure predictable `ASC`/`DESC` ordering and maximum performance.
 
 ---
 
@@ -168,7 +168,7 @@ Drops an entire collection index and its associated internal storage completely.
 
 ### Concurrency
 
-Aster uses **sled's `compare_and_swap` (CAS)** for all inverted index mutations to provide **lock-free, per-key atomicity** under concurrent requests. Every upsert and delete that modifies a word's posting list performs an atomic CAS cycle — the list is read, modified in memory, and written back only if the key hasn't changed since the read. On conflict, the operation retries immediately.
+Aperio uses **sled's `compare_and_swap` (CAS)** for all inverted index mutations to provide **lock-free, per-key atomicity** under concurrent requests. Every upsert and delete that modifies a word's posting list performs an atomic CAS cycle — the list is read, modified in memory, and written back only if the key hasn't changed since the read. On conflict, the operation retries immediately.
 
 This guarantees:
 - **No lost updates** — concurrent inserts for the same word never overwrite each other
@@ -182,7 +182,7 @@ Requires the [Rust toolchain](https://rustup.rs/).
 ```shell
 cargo check     # Validate code compilation
 cargo test      # Run the internal test suite
-cargo run       # Start Aster in development mode
+cargo run       # Start Aperio in development mode
 
 ```
 

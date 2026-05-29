@@ -1,4 +1,4 @@
-# Aster — agent guide
+# Aperio — agent guide
 
 ## First-read warning
 
@@ -6,7 +6,7 @@
 
 ## Project structure
 
-Single-crate Rust project (`aster`). No workspace, no sub-crates.
+Single-crate Rust project (`aperio`). No workspace, no sub-crates.
 
 ```
 src/
@@ -24,7 +24,7 @@ cargo check              # compile-check only (fastest feedback)
 cargo clippy             # lint (no custom config, uses defaults)
 cargo fmt                # format (no custom config, uses rustfmt defaults)
 cargo test               # runs — but there are zero tests in the codebase
-cargo run                # dev server on :3000 (data persists to ./data/aster.db)
+cargo run                # dev server on :3000 (data persists to ./data/aperio.db)
 cargo run --release      # optimized build
 ```
 
@@ -39,7 +39,7 @@ Two environment variables control the server:
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aster.db`) |
+| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio.db`) |
 | `CONFIG_FILE` | (none) | Path to optional TOML config file |
 
 Config file parsing is **silently lenient**: on any read/parse error it falls back to defaults with only a warning to stderr. No hard failures.

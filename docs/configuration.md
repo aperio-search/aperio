@@ -1,6 +1,6 @@
 # Configuration
 
-Aster can be tuned via an optional TOML config file. Set the `CONFIG_FILE` environment variable to point to your config file. If unset or missing, safe defaults are used.
+Aperio can be tuned via an optional TOML config file. Set the `CONFIG_FILE` environment variable to point to your config file. If unset or missing, safe defaults are used.
 
 ## Example
 
@@ -12,7 +12,7 @@ docker run \
   -e DATA_DIR=/data \
   -e CONFIG_FILE=/data/config.toml \
   -p 3000:3000 \
-  andresribeiro/aster
+  andresribeiro/aperio
 ```
 
 Example `config.toml`:

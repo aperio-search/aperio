@@ -3,7 +3,7 @@
 layout: home
 
 hero:
-  name: "Aster"
+  name: "Aperio"
   text: "Screamingly fast, ultra-lean search engine."
   actions:
     - theme: brand
@@ -11,7 +11,7 @@ hero:
       link: /quickstart
     - theme: alt
       text: GitHub
-      link: https://github.com/andresribeiro/aster
+      link: https://github.com/andresribeiro/aperio
 
 features:
   - title: Screamingly Fast

@@ -17,8 +17,8 @@ const members = [
 
 # About
 
-Love using Aster? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aster screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
+Love using Aperio? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
 
-Thank you for using Aster! Feel free to reach me out:
+Thank you for using Aperio! Feel free to reach me out:
 
 <VPTeamMembers size="small" :members />
