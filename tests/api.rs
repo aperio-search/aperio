@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use aperio::routes;
 use aperio::store::Store;
 use axum::body::Body;
@@ -14,7 +16,7 @@ fn test_app() -> (Router, TempDir) {
         .cache_size(1_000_000)
         .open()
         .unwrap();
-    let store = Store::new(db);
+    let store = Arc::new(Store::new(db));
     (routes::create_router(store), dir)
 }
 

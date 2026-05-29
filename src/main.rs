@@ -36,6 +36,8 @@ async fn main() {
 
     let store_config = app_config.merge_into_store_config();
     let store = Store::with_config(db, store_config);
+    let store = std::sync::Arc::new(store);
+    store.spawn_background();
     let app = routes::create_router(store);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

@@ -14,7 +14,7 @@ use crate::models::{
 use crate::store::Store;
 
 pub struct AppState {
-    pub store: Store,
+    pub store: Arc<Store>,
 }
 
 fn router_with_state(state: Arc<AppState>) -> Router {
@@ -32,7 +32,7 @@ fn router_with_state(state: Arc<AppState>) -> Router {
         .fallback(not_found)
 }
 
-pub fn create_router(store: Store) -> Router {
+pub fn create_router(store: Arc<Store>) -> Router {
     let state = Arc::new(AppState { store });
     router_with_state(state)
 }
