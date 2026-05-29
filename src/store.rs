@@ -353,7 +353,7 @@ impl Store {
     ) -> Result<(), AppError> {
         let marker_key = word.as_bytes();
         if inverted.get(marker_key)?.is_none() {
-            inverted.insert(marker_key, &[])?;
+            inverted.insert(marker_key, [])?;
         }
 
         let indices = Self::list_shard_indices(inverted, word)?;
@@ -478,7 +478,7 @@ impl Store {
     ) -> Result<(), AppError> {
         let marker_key = word.as_bytes();
         if inverted.get(marker_key)?.is_none() {
-            inverted.insert(marker_key, &[])?;
+            inverted.insert(marker_key, [])?;
         }
 
         let indices = Self::list_shard_indices(inverted, word)?;
@@ -570,8 +570,8 @@ impl Store {
             }).collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
-        word_shards.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
-        if word_shards.first().map_or(true, |(_, idx)| idx.is_empty()) {
+        word_shards.sort_by_key(|a| a.1.len());
+        if word_shards.first().is_none_or(|(_, idx)| idx.is_empty()) {
             return Ok(Vec::new());
         }
 
@@ -584,10 +584,9 @@ impl Store {
                     let mut word_bitmap = RoaringTreemap::new();
                     for &shard_idx in &indices {
                         let key = Self::shard_key(&word, shard_idx);
-                        if let Some(data) = inv.get(&key)? {
-                            if let Ok(bitmap) = roaring_from_slice(&data) {
-                                word_bitmap |= &bitmap;
-                            }
+                        if let Some(data) = inv.get(&key)?
+                            && let Ok(bitmap) = roaring_from_slice(&data) {
+                            word_bitmap |= &bitmap;
                         }
                     }
                     Ok(word_bitmap)
@@ -788,8 +787,8 @@ impl Store {
             }).collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
-        word_shards.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
-        if word_shards.first().map_or(true, |(_, idx)| idx.is_empty()) {
+        word_shards.sort_by_key(|a| a.1.len());
+        if word_shards.first().is_none_or(|(_, idx)| idx.is_empty()) {
             return Ok(Vec::new());
         }
 
@@ -892,8 +891,7 @@ impl Store {
         while (state.shard_pos as usize) < state.indices.len() {
             let idx = state.indices[state.shard_pos as usize];
             let key = Self::shard_key(word, idx);
-            match inverted.get(&key)? {
-                Some(data) => {
+            if let Some(data) = inverted.get(&key)? {
                     let non_empty = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
                         .map(|a| !a.ids.is_empty())
                         .unwrap_or(false);
@@ -902,8 +900,6 @@ impl Store {
                         state.cur_pos = 0;
                         return Ok(());
                     }
-                }
-                None => {}
             }
             state.shard_pos += 1;
         }
@@ -920,8 +916,7 @@ impl Store {
         while state.shard_pos >= 0 {
             let idx = state.indices[state.shard_pos as usize];
             let key = Self::shard_key(word, idx);
-            match inverted.get(&key)? {
-                Some(data) => {
+            if let Some(data) = inverted.get(&key)? {
                     let maybe_len = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
                         .map(|a| a.ids.len())
                         .unwrap_or(0);
@@ -930,8 +925,6 @@ impl Store {
                         state.cur_pos = maybe_len.saturating_sub(1);
                         return Ok(());
                     }
-                }
-                None => {}
             }
             state.shard_pos -= 1;
         }
@@ -964,8 +957,7 @@ impl Store {
             }
             let idx = state.indices[state.shard_pos as usize];
             let key = Self::shard_key(word, idx);
-            match inverted.get(&key)? {
-                Some(data) => {
+            if let Some(data) = inverted.get(&key)? {
                     let maybe_len = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
                         .map(|a| a.ids.len())
                         .unwrap_or(0);
@@ -978,8 +970,6 @@ impl Store {
                         };
                         return Ok(());
                     }
-                }
-                None => {}
             }
         }
     }
