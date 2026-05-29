@@ -68,6 +68,12 @@ Multi-stage build in `Dockerfile`. Image exposes `:3000`, expects `DATA_DIR=/dat
 
 Root: **Elastic License** (not MIT). `docs/` is MIT.
 
+## Git workflow
+
+- **Never commit to `main`.** All work must be done on a feature branch.
+- After making changes, always open a PR (via `gh pr create`).
+- After the PR is opened, **ask the user** whether to merge it to `main`.
+
 ## What is NOT present
 
 No CI workflows, no pre-commit hooks, no linter/formatter config files beyond defaults. No integration tests, no benchmarks. No generated code or codegen steps. No database migrations.
