@@ -1,2 +1,4 @@
 /target
 /data
+/docs/node_modules
+/docs/bun.lock

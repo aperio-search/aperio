@@ -1,0 +1,24 @@
+<script setup>
+import { VPTeamMembers } from 'vitepress/theme'
+
+const members = [
+  {
+    avatar: 'https://www.github.com/andresribeiro.png',
+    name: 'André Ribeiro',
+    title: 'Creator',
+    links: [
+      { icon: 'github', link: 'https://github.com/andresribeiro' },
+      { icon: 'x', link: 'https://x.com/andresribeiroo' },
+      { icon: 'instagram', link: 'https://instagram.com/andresribeiroo' }
+    ]
+  },
+]
+</script>
+
+# About
+
+Love using Aster? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aster screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
+
+Thank you for using Aster! Feel free to reach me out:
+
+<VPTeamMembers size="small" :members />
