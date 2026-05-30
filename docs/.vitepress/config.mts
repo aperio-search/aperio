@@ -47,6 +47,7 @@ export default defineConfig({
             link: "/autocomplete-suggestions",
           },
           { text: "Deploying", link: "/deploying" },
+          { text: "Import & Export", link: "/import-export" },
         ],
       },
       {

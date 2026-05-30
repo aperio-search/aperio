@@ -118,6 +118,23 @@ mod tests {
 }
 
 #[derive(Deserialize)]
+pub struct BackupPath {
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct ExportResponse {
+    pub ok: bool,
+    pub size: u64,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct ImportResponse {
+    pub ok: bool,
+}
+
+#[derive(Deserialize)]
 pub struct SearchParams {
     pub q: String,
     pub sort: Option<String>,

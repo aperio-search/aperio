@@ -1,3 +1,5 @@
+use std::fmt;
+
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -8,6 +10,18 @@ pub enum AppError {
     NotFound(String),
     BadRequest(String),
 }
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::Internal(msg) => write!(f, "internal error: {msg}"),
+            AppError::NotFound(msg) => write!(f, "not found: {msg}"),
+            AppError::BadRequest(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {

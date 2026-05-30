@@ -10,8 +10,9 @@ use tower_http::trace::TraceLayer;
 use crate::auth::AuthConfig;
 use crate::error::AppError;
 use crate::models::{
-    CollectionCreated, CollectionInfo, CreateCollectionRequest, ListCollectionsResponse,
-    SearchParams, SearchResponse, StatusResponse, SuggestParams, SuggestResponse,
+    BackupPath, CollectionCreated, CollectionInfo, CreateCollectionRequest, ExportResponse,
+    ImportResponse, ListCollectionsResponse, SearchParams, SearchResponse, StatusResponse,
+    SuggestParams, SuggestResponse,
 };
 use crate::store::Store;
 
@@ -32,6 +33,8 @@ fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
         .route("/collections/{collection}/items/{id}", delete(delete_item))
         .route("/collections/{collection}", get(collection_info))
         .route("/collections/{collection}", delete(delete_collection))
+        .route("/backup/export", post(export_handler))
+        .route("/backup/import", post(import_handler))
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn_with_state(auth, crate::auth::check_auth))
         .with_state(state)
@@ -129,6 +132,34 @@ async fn delete_collection(
 ) -> Result<StatusCode, AppError> {
     state.store.delete_collection(&collection)?;
     Ok(StatusCode::OK)
+}
+
+async fn export_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BackupPath>,
+) -> Result<Json<ExportResponse>, AppError> {
+    let data = state.store.export_snapshot()?;
+    let path = std::path::Path::new(&body.path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::Internal(format!("failed to create output directory: {e}")))?;
+    }
+    std::fs::write(path, &data)
+        .map_err(|e| AppError::Internal(format!("failed to write export file: {e}")))?;
+    let size = data.len() as u64;
+    tracing::info!(path = %body.path, size, "export completed");
+    Ok(Json(ExportResponse { ok: true, size, path: body.path }))
+}
+
+async fn import_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BackupPath>,
+) -> Result<Json<ImportResponse>, AppError> {
+    let data = std::fs::read(&body.path)
+        .map_err(|e| AppError::Internal(format!("failed to read import file: {e}")))?;
+    state.store.import_snapshot(&data)?;
+    tracing::info!(path = %body.path, "import completed");
+    Ok(Json(ImportResponse { ok: true }))
 }
 
 async fn not_found() -> (StatusCode, Json<serde_json::Value>) {

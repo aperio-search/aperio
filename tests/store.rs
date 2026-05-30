@@ -351,3 +351,113 @@ fn persist_and_reopen() {
     let list = store.list_collections().unwrap();
     assert_eq!(list.collections.len(), 1);
 }
+
+#[test]
+fn export_import_roundtrip() {
+    let dir = TempDir::new().unwrap();
+
+    // Seed source
+    let src_path = dir.path().join("src");
+    let db = fjall::Database::builder(&src_path)
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "a", "content": "hello world"}))
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "b", "content": "foo bar"}))
+        .unwrap();
+
+    // Export via Store method (uses snapshot internally)
+    let data = store.export_snapshot().unwrap();
+    assert!(!data.is_empty(), "export data should not be empty");
+    drop(store);
+
+    // Import into a fresh store
+    let dst_path = dir.path().join("dst");
+    let db = fjall::Database::builder(&dst_path)
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    store.import_snapshot(&data).unwrap();
+
+    // Verify
+    let list = store.list_collections().unwrap();
+    assert_eq!(list.collections.len(), 1);
+    assert_eq!(list.collections[0].name, "docs");
+
+    let r1 = store.search("docs", "hello", false, 10, None).unwrap();
+    assert_eq!(r1.len(), 1);
+    assert_eq!(r1[0]["id"], "a");
+
+    let r2 = store.search("docs", "foo", false, 10, None).unwrap();
+    assert_eq!(r2.len(), 1);
+    assert_eq!(r2[0]["id"], "b");
+}
+
+#[test]
+fn export_empty_database() {
+    let dir = TempDir::new().unwrap();
+    let db = fjall::Database::builder(dir.path())
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    let data = store.export_snapshot().unwrap();
+    // Should produce valid export data (empty keyspace list)
+    assert!(!data.is_empty(), "export data should have header even with no collections");
+}
+
+#[test]
+fn export_import_number_collection() {
+    let dir = TempDir::new().unwrap();
+
+    let src_path = dir.path().join("src");
+    let db = fjall::Database::builder(&src_path)
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    store
+        .create_collection("nums", "number", &["val".into()])
+        .unwrap();
+    store.upsert("nums", json!({"id": 42, "val": "hello"})).unwrap();
+    store.upsert("nums", json!({"id": 99, "val": "world"})).unwrap();
+
+    let data = store.export_snapshot().unwrap();
+    drop(store);
+
+    let dst_path = dir.path().join("dst");
+    let db = fjall::Database::builder(&dst_path)
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    store.import_snapshot(&data).unwrap();
+
+    let r = store.search("nums", "hello", false, 10, None).unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0]["id"], 42);
+
+    let r = store.search("nums", "world", false, 10, None).unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0]["id"], 99);
+}
+
+#[test]
+fn export_import_bad_magic() {
+    let dir = TempDir::new().unwrap();
+    let db = fjall::Database::builder(dir.path())
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    let err = store.import_snapshot(b"garbage data").unwrap_err();
+    assert!(err.to_string().contains("bad magic"), "got: {err}");
+}

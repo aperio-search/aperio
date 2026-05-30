@@ -33,4 +33,11 @@ Complete list of all Aperio HTTP endpoints.
 | `GET` | `/collections/{collection}/search` | Search documents matching a query |
 | `GET` | `/collections/{collection}/suggest` | Autocomplete suggestions for a prefix |
 
-See the [Guides](/quickstart) section for detailed endpoint documentation with parameters and examples.
+## Backup
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/backup/export` | Export a snapshot of the entire database to a file |
+| `POST` | `/backup/import` | Import a snapshot from a file into the database |
+
+See the [Import & Export](/import-export) guide for details and examples.
