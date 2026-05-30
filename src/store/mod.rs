@@ -528,22 +528,12 @@ impl Store {
 
     pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
         let meta = self.validate_collection_exists(collection)?;
-        let inverted = self.inverted_keyspace(collection)?;
         let docs = self.docs_keyspace(collection)?;
-
-        let mut unique_terms = 0usize;
-        for guard in inverted.iter() {
-            let (key, value) = guard.into_inner()?;
-            if !key.contains(&(SHARD_DELIM as u8)) && value.is_empty() {
-                unique_terms += 1;
-            }
-        }
 
         Ok(CollectionInfo {
             name: collection.to_string(),
             id_type: format!("{:?}", meta.id_type).to_lowercase(),
             document_count: docs.len()?,
-            unique_terms,
             searchable_fields: meta.searchable_fields,
         })
     }
@@ -1057,7 +1047,6 @@ mod tests {
         assert_eq!(info.name, "docs");
         assert_eq!(info.id_type, "string");
         assert_eq!(info.document_count, 1);
-        assert_eq!(info.unique_terms, 2);
     }
 
     #[test]
@@ -1068,7 +1057,6 @@ mod tests {
             .unwrap();
         let info = store.collection_info("docs").unwrap();
         assert_eq!(info.document_count, 0);
-        assert_eq!(info.unique_terms, 0);
     }
 
     #[test]

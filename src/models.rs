@@ -67,13 +67,12 @@ mod tests {
             name: "c".into(),
             id_type: "string".into(),
             document_count: 10,
-            unique_terms: 42,
             searchable_fields: vec!["title".into()],
         };
         let json = serde_json::to_string(&info).unwrap();
         assert_eq!(
             json,
-            r#"{"name":"c","id_type":"string","document_count":10,"unique_terms":42,"searchable_fields":["title"]}"#
+            r#"{"name":"c","id_type":"string","document_count":10,"searchable_fields":["title"]}"#
         );
     }
 
@@ -189,7 +188,6 @@ pub struct CollectionInfo {
     pub name: String,
     pub id_type: String,
     pub document_count: usize,
-    pub unique_terms: usize,
     pub searchable_fields: Vec<String>,
 }
 
