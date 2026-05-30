@@ -4,6 +4,7 @@ import { defineConfig } from "vitepress";
 export default defineConfig({
   title: "Aperio",
   description: "Screamingly fast, ultra-lean search engine.",
+  sitemap: { hostname: "https://aperiosearch.com" },
   head: [
     ["link", { rel: "icon", href: "/favicon.ico", sizes: "any" }],
     ["link", { rel: "icon", href: "/favicon-32x32.png", type: "image/png", sizes: "32x32" }],
