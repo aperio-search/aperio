@@ -53,6 +53,44 @@ const results = await client.search("movies", { q: "star" });
 const suggestions = await client.suggest("movies", { q: "emp" });
 ```
 
+```js [Fetch]
+// Create the "movies" collection
+await fetch("http://localhost:3000/collections", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: "SecretApiKey" },
+  body: JSON.stringify({ name: "movies", id_type: "string", searchable_fields: ["title"] }),
+});
+
+// Insert a few documents
+await fetch("http://localhost:3000/collections/movies/items", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: "SecretApiKey" },
+  body: JSON.stringify({ id: "1", title: "the empire strikes back" }),
+});
+await fetch("http://localhost:3000/collections/movies/items", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: "SecretApiKey" },
+  body: JSON.stringify({ id: "2", title: "star wars a new hope" }),
+});
+await fetch("http://localhost:3000/collections/movies/items", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: "SecretApiKey" },
+  body: JSON.stringify({ id: "3", title: "return of the jedi" }),
+});
+
+// Search for "star"
+const res = await fetch("http://localhost:3000/collections/movies/search?q=star", {
+  headers: { Authorization: "PublicApiKey" },
+});
+const movies = await res.json();
+
+// Autocomplete "emp"
+const sugRes = await fetch("http://localhost:3000/collections/movies/suggest?q=emp", {
+  headers: { Authorization: "PublicApiKey" },
+});
+const suggestions = await sugRes.json();
+```
+
 ```sh [cURL]
 # Create a collection that uses string IDs, with "title" as the searchable field
 curl -X POST http://localhost:3000/collections \
