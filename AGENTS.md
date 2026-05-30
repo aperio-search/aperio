@@ -75,13 +75,6 @@ Multi-stage build in `Dockerfile`. Image exposes `:3000`, expects `DATA_DIR=/dat
 
 Root: **Elastic License** (not MIT). `docs/` is MIT.
 
-## Git workflow
-
-- **Never commit to `main`.** All work must be done on the `development` branch.
-- After making changes on `development`, push them and open a PR (via `gh pr create` targeting `main`).
-- After the PR is opened, **ask the user** whether to merge it to `main` (via `gh pr merge`).
-- When merging, you **must always** use the `--subject` flag. The subject must be a concise summary of the changes, with the PR number appended to the very end in parentheses.
-
 ## Configuration changes
 
 When adding, removing, or modifying any config option in `src/config.rs`, update the reference table and example in `docs/configuration.md` to match.
