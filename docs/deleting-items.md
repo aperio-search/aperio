@@ -1,5 +1,7 @@
 # Deleting Items
 
+> **Auth required**: `Authorization: <main_api_key>` header.
+
 Deletes a single item from a collection by its `ID`.
 
 ## Example

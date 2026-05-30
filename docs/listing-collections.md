@@ -1,5 +1,7 @@
 # Listing Collections
 
+> **Auth required**: `Authorization: <main_api_key>` header.
+
 Returns a list of all collections with their names and ID types.
 
 ## Example

@@ -2,11 +2,13 @@
 
 Complete list of all Aperio HTTP endpoints.
 
+> **Authentication**: All endpoints require an `Authorization: <key>` header, except `GET /status` which is public. Use the **main API key** for full access, or the **search API key** for `search` and `suggest` endpoints only. See [Environment Variables](/environment-variables) for configuration.
+
 ## Status
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/status` | Health check |
+| `GET` | `/status` | Health check (public, no auth required) |
 
 ## Collections
 

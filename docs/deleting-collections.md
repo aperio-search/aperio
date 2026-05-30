@@ -1,5 +1,7 @@
 # Deleting Collections
 
+> **Auth required**: `Authorization: <main_api_key>` header.
+
 Drops an entire collection index and its associated internal storage completely.
 
 ## Example

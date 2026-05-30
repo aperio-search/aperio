@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
 
+use crate::auth::AuthConfig;
 use crate::error::AppError;
 use crate::models::{
     CollectionCreated, CollectionInfo, CreateCollectionRequest, ListCollectionsResponse,
@@ -17,7 +19,7 @@ pub struct AppState {
     pub store: Arc<Store>,
 }
 
-fn router_with_state(state: Arc<AppState>) -> Router {
+fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
     Router::new()
         .route("/status", get(status))
         .route(
@@ -31,13 +33,14 @@ fn router_with_state(state: Arc<AppState>) -> Router {
         .route("/collections/{collection}", get(collection_info))
         .route("/collections/{collection}", delete(delete_collection))
         .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn_with_state(auth, crate::auth::check_auth))
         .with_state(state)
         .fallback(not_found)
 }
 
-pub fn create_router(store: Arc<Store>) -> Router {
+pub fn create_router(store: Arc<Store>, auth: AuthConfig) -> Router {
     let state = Arc::new(AppState { store });
-    router_with_state(state)
+    router_with_state(state, auth)
 }
 
 async fn status() -> Json<StatusResponse> {

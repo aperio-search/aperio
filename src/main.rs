@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use aperio::{config::AppConfig, routes, store::Store};
+use aperio::{auth::AuthConfig, config::AppConfig, routes, store::Store};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -32,11 +32,32 @@ async fn main() {
     }
     let db = db_builder.open().expect("failed to open database");
 
+    let main_api_key = app_config.main_api_key.clone();
+    let search_api_key = app_config.search_api_key.clone();
+
     let store_config = app_config.merge_into_store_config();
     let store = Store::with_config(db, store_config);
     let store = std::sync::Arc::new(store);
     store.spawn_background();
-    let app = routes::create_router(store);
+
+    let mut auth = AuthConfig::default();
+    if let Some(key) = main_api_key.filter(|k| !k.is_empty()) {
+        auth.main_api_key = key;
+    }
+    if let Some(key) = search_api_key.filter(|k| !k.is_empty()) {
+        auth.search_api_key = key;
+    }
+    if let Ok(key) = std::env::var("MAIN_API_KEY") {
+        if !key.is_empty() {
+            auth.main_api_key = key;
+        }
+    }
+    if let Ok(key) = std::env::var("SEARCH_API_KEY") {
+        if !key.is_empty() {
+            auth.search_api_key = key;
+        }
+    }
+    let app = routes::create_router(store, auth);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 

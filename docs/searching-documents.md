@@ -1,5 +1,7 @@
 # Searching Documents
 
+> **Auth required**: `Authorization: <main_api_key>` or `Authorization: <search_api_key>` header.
+
 Multi-word queries perform an `AND` search. Only documents matching all terms are returned. Results include the full stored JSON document for each match.
 
 ## Cursor-based pagination

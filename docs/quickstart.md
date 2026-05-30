@@ -30,24 +30,30 @@ Once the server is running, create a collection and start searching in seconds.
 # Create a collection that uses string IDs, with "title" as the searchable field
 curl -X POST http://localhost:3000/collections \
   -H "Content-Type: application/json" \
+  -H "Authorization: SecretApiKey" \
   -d '{"name": "movies", "id_type": "string", "searchable_fields": ["title"]}'
 
 # Insert a few documents
 curl -X POST http://localhost:3000/collections/movies/items \
   -H "Content-Type: application/json" \
+  -H "Authorization: SecretApiKey" \
   -d '{"id": "1", "title": "the empire strikes back"}'
 
 curl -X POST http://localhost:3000/collections/movies/items \
   -H "Content-Type: application/json" \
+  -H "Authorization: SecretApiKey" \
   -d '{"id": "2", "title": "star wars a new hope"}'
 
 curl -X POST http://localhost:3000/collections/movies/items \
   -H "Content-Type: application/json" \
+  -H "Authorization: SecretApiKey" \
   -d '{"id": "3", "title": "return of the jedi"}'
 
 # Search for "star" — returns the full matching document(s)
-curl "http://localhost:3000/collections/movies/search?q=star"
+curl "http://localhost:3000/collections/movies/search?q=star" \
+  -H "Authorization: PublicApiKey"
 
 # Autocomplete "emp" — returns "empire"
-curl "http://localhost:3000/collections/movies/suggest?q=emp"
+curl "http://localhost:3000/collections/movies/suggest?q=emp" \
+  -H "Authorization: PublicApiKey"
 ```

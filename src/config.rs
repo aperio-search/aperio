@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub compression: Option<String>,
     pub log_level: Option<String>,
     pub index_interval_ms: Option<u64>,
+    pub main_api_key: Option<String>,
+    pub search_api_key: Option<String>,
 }
 
 impl AppConfig {
@@ -124,6 +126,30 @@ index_interval_ms = 500
     }
 
     #[test]
+    fn load_with_api_keys() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+main_api_key = "custom-main-key"
+search_api_key = "custom-search-key"
+"#,
+        )
+        .unwrap();
+        let cfg = AppConfig::load(Some(&path));
+        assert_eq!(cfg.main_api_key.as_deref(), Some("custom-main-key"));
+        assert_eq!(cfg.search_api_key.as_deref(), Some("custom-search-key"));
+    }
+
+    #[test]
+    fn load_without_api_keys() {
+        let cfg = AppConfig::load(None);
+        assert!(cfg.main_api_key.is_none());
+        assert!(cfg.search_api_key.is_none());
+    }
+
+    #[test]
     fn load_invalid_toml() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
@@ -155,6 +181,8 @@ index_interval_ms = 500
             block_cache_size: None,
             maintenance_threads: None,
             log_level: None,
+            main_api_key: None,
+            search_api_key: None,
         };
         let store_cfg = app_cfg.merge_into_store_config();
         assert_eq!(store_cfg.min_token_length, 5);
