@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub index_interval_ms: Option<u64>,
     pub main_api_key: Option<String>,
     pub search_api_key: Option<String>,
+    pub dumps_folder: Option<String>,
 }
 
 impl AppConfig {
@@ -100,6 +101,7 @@ maintenance_threads = 2
 compression = "lz4"
 log_level = "debug"
 index_interval_ms = 500
+dumps_folder = "/data/dumps"
 "#,
         )
         .unwrap();
@@ -113,6 +115,7 @@ index_interval_ms = 500
         assert_eq!(cfg.compression.as_deref(), Some("lz4"));
         assert_eq!(cfg.log_level.as_deref(), Some("debug"));
         assert_eq!(cfg.index_interval_ms, Some(500));
+        assert_eq!(cfg.dumps_folder.as_deref(), Some("/data/dumps"));
     }
 
     #[test]
@@ -183,6 +186,7 @@ search_api_key = "custom-search-key"
             log_level: None,
             main_api_key: None,
             search_api_key: None,
+            dumps_folder: None,
         };
         let store_cfg = app_cfg.merge_into_store_config();
         assert_eq!(store_cfg.min_token_length, 5);

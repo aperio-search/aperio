@@ -49,12 +49,33 @@ pub fn export_snapshot(db: &fjall::Database) -> Result<Vec<u8>, AppError> {
     Ok(buf)
 }
 
+/// Remove every key-value pair from every keyspace in the database.
+fn clear_all_keyspaces(db: &fjall::Database) -> Result<(), AppError> {
+    let names = db.list_keyspace_names();
+    for name in &names {
+        let name_str: &str = name.as_ref();
+        let keyspace = db.keyspace(name_str, fjall::KeyspaceCreateOptions::default)?;
+        let keys: Vec<Vec<u8>> = keyspace
+            .iter()
+            .filter_map(|g| g.into_inner().ok())
+            .map(|(k, _)| k.to_vec())
+            .collect();
+        for key in &keys {
+            keyspace.remove(key)?;
+        }
+    }
+    Ok(())
+}
+
 /// Import a previously exported binary snapshot into the database.
 ///
-/// All existing keyspace data is preserved — keys from the archive overwrite
-/// matching keys in the running database. After import the in-memory
-/// collection metadata cache is invalidated so the caller must refresh it.
+/// Existing data is **erased first** — every key-value pair in every keyspace
+/// is removed before inserting the archive contents. After import the
+/// in-memory collection metadata cache is invalidated so the caller must
+/// refresh it.
 pub fn import_snapshot(db: &fjall::Database, data: &[u8]) -> Result<(), AppError> {
+    clear_all_keyspaces(db)?;
+
     let mut reader = std::io::BufReader::new(data);
 
     let mut magic = [0u8; 8];
