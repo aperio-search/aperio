@@ -32,7 +32,13 @@ pub struct PostingShard {
 pub struct QueuedIndex {
     pub collection: String,
     pub id: String,
-    pub content: String,
+    pub document: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
+pub struct CollectionMeta {
+    pub id_type: IdType,
+    pub searchable_fields: Vec<String>,
 }
 
 #[derive(Clone)]

@@ -10,7 +10,7 @@ use crate::models::{
     CollectionCreated, CollectionInfo, CollectionSummary, ListCollectionsResponse,
 };
 
-pub use config::{IdType, StoreConfig};
+pub use config::{CollectionMeta, IdType, StoreConfig};
 
 macro_rules! encode_rkyv {
     ($value:expr) => {{
@@ -51,6 +51,54 @@ fn tokenize(content: &str, min_token_length: usize) -> HashSet<String> {
         .collect()
 }
 
+fn extract_searchable_content(doc: &serde_json::Value, fields: &[String]) -> String {
+    let mut parts = Vec::new();
+    for field in fields {
+        if let Some(value) = doc.get(field) {
+            match value {
+                serde_json::Value::String(s) => parts.push(s.clone()),
+                serde_json::Value::Number(n) => parts.push(n.to_string()),
+                serde_json::Value::Bool(b) => parts.push(b.to_string()),
+                serde_json::Value::Array(arr) => {
+                    for v in arr {
+                        match v {
+                            serde_json::Value::String(s) => parts.push(s.clone()),
+                            serde_json::Value::Number(n) => parts.push(n.to_string()),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    parts.join(" ")
+}
+
+fn extract_id(doc: &serde_json::Value, id_type: IdType) -> Result<String, AppError> {
+    let id_val = doc
+        .get("id")
+        .ok_or_else(|| AppError::BadRequest("missing 'id' field in document".into()))?;
+    match id_type {
+        IdType::String => id_val
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| AppError::BadRequest("'id' must be a string for string collection".into())),
+        IdType::Number => match id_val {
+            serde_json::Value::Number(n) => Ok(n.to_string()),
+            serde_json::Value::String(s) => s.parse::<u64>().map(|n| n.to_string()).map_err(|_| {
+                AppError::BadRequest(format!(
+                    "'id' must be a valid number for number collection, got '{}'",
+                    s
+                ))
+            }),
+            _ => Err(AppError::BadRequest(
+                "'id' must be a number for number collection".into(),
+            )),
+        },
+    }
+}
+
 mod config;
 mod posting_list;
 mod search;
@@ -59,7 +107,7 @@ pub struct Store {
     db: fjall::Database,
     config: StoreConfig,
     lock: Mutex<()>,
-    collections: RwLock<HashMap<String, IdType>>,
+    collections: RwLock<HashMap<String, config::CollectionMeta>>,
     next_seq: AtomicU64,
     background_active: AtomicBool,
 }
@@ -76,8 +124,8 @@ impl Store {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
                         let name = String::from_utf8_lossy(&key).to_string();
-                        if let Ok(id_type) = decode_rkyv!(config::IdType, &value) {
-                            map.insert(name, id_type);
+                        if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &value) {
+                            map.insert(name, col_meta);
                         }
                     }
                 }
@@ -143,12 +191,12 @@ impl Store {
         self.next_seq.fetch_add(1, Ordering::Relaxed)
     }
 
-    fn validate_collection_exists(&self, collection: &str) -> Result<IdType, AppError> {
+    fn validate_collection_exists(&self, collection: &str) -> Result<config::CollectionMeta, AppError> {
         self.collections
             .read()
             .unwrap()
             .get(collection)
-            .copied()
+            .cloned()
             .ok_or_else(|| AppError::NotFound(format!("collection '{}' not found", collection)))
     }
 
@@ -156,6 +204,7 @@ impl Store {
         &self,
         name: &str,
         id_type: &str,
+        searchable_fields: &[String],
     ) -> Result<CollectionCreated, AppError> {
         let id_type_enum = match id_type {
             "number" => IdType::Number,
@@ -179,102 +228,113 @@ impl Store {
                 )));
             }
 
+            let col_meta = config::CollectionMeta {
+                id_type: id_type_enum,
+                searchable_fields: searchable_fields.to_vec(),
+            };
+
             let meta = self.meta_keyspace()?;
-            let value = encode_rkyv!(&id_type_enum)?;
+            let value = encode_rkyv!(&col_meta)?;
             meta.insert(name.as_bytes(), &value)?;
 
-            map.insert(name.to_string(), id_type_enum);
+            map.insert(name.to_string(), col_meta);
         }
 
-        tracing::info!(collection = %name, id_type = %id_type, "collection created");
+        tracing::info!(collection = %name, id_type = %id_type, searchable_fields = ?searchable_fields, "collection created");
 
         Ok(CollectionCreated {
             name: name.to_string(),
             id_type: id_type.to_string(),
+            searchable_fields: searchable_fields.to_vec(),
         })
     }
 
-    fn upsert_internal(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
-        let id_type = self.validate_collection_exists(collection)?;
-        let id_u64 = match id_type {
-            IdType::Number => Some(id.parse::<u64>().map_err(|_| {
-                AppError::BadRequest(format!(
-                    "invalid id '{}': collection '{}' expects numeric ids",
-                    id, collection
-                ))
-            })?),
-            IdType::String => None,
-        };
-
-        let _lock = self.lock.lock().unwrap();
+    fn upsert_internal(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: &serde_json::Value,
+    ) -> Result<(), AppError> {
+        let meta = self.validate_collection_exists(collection)?;
 
         let inverted = self.inverted_keyspace(collection)?;
         let docs = self.docs_keyspace(collection)?;
+        let searchable_content = extract_searchable_content(doc, &meta.searchable_fields);
+        let new_words = tokenize(&searchable_content, self.config.min_token_length);
 
-        let new_words = tokenize(content, self.config.min_token_length);
-
-        if let Some(old_data) = docs.get(id.as_bytes())? {
-            let old_tokens: Vec<String> = decode_rkyv!(Vec<String>, &old_data)?;
-            let old_words: HashSet<String> = old_tokens.into_iter().collect();
-            for word in old_words.difference(&new_words) {
-                match id_type {
-                    IdType::Number => posting_list::remove_from_roaring_posting_list(
-                        &inverted,
-                        word,
-                        id_u64.unwrap(),
-                    )?,
-                    IdType::String => posting_list::remove_from_posting_list(&inverted, word, id)?,
-                }
+        // If old document exists, compute its tokens and remove diff
+        if let Some(old_data) = docs.get(id.as_bytes())?
+            && let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data) {
+                let old_content = extract_searchable_content(&old_doc, &meta.searchable_fields);
+                let old_words = tokenize(&old_content, self.config.min_token_length);
+                for word in old_words.difference(&new_words) {
+                    match meta.id_type {
+                        IdType::Number => {
+                            let id_u64 = id.parse::<u64>().map_err(|_| {
+                                AppError::Internal(format!("invalid numeric id in storage: {}", id))
+                            })?;
+                            posting_list::remove_from_roaring_posting_list(
+                                &inverted, word, id_u64,
+                            )?;
+                        }
+                        IdType::String => {
+                            posting_list::remove_from_posting_list(&inverted, word, id)?;
+                        }
+                    }
             }
         }
 
         for word in &new_words {
-            match id_type {
-                IdType::Number => posting_list::add_to_roaring_posting_list(
-                    &inverted,
-                    word,
-                    id_u64.unwrap(),
-                    self.config.max_roaring_shard_size,
-                )?,
-                IdType::String => posting_list::add_to_posting_list(
-                    &inverted,
-                    word,
-                    id,
-                    self.config.max_shard_size,
-                )?,
+            match meta.id_type {
+                IdType::Number => {
+                    let id_u64 = id.parse::<u64>().map_err(|_| {
+                        AppError::Internal(format!("invalid numeric id in storage: {}", id))
+                    })?;
+                    posting_list::add_to_roaring_posting_list(
+                        &inverted,
+                        word,
+                        id_u64,
+                        self.config.max_roaring_shard_size,
+                    )?;
+                }
+                IdType::String => {
+                    posting_list::add_to_posting_list(
+                        &inverted,
+                        word,
+                        id,
+                        self.config.max_shard_size,
+                    )?;
+                }
             }
         }
 
-        let tokens: Vec<String> = new_words.into_iter().collect();
-        docs.insert(id.as_bytes(), encode_rkyv!(&tokens)?)?;
-        tracing::debug!(collection = %collection, id = %id, tokens = tokens.len(), "item upserted");
+        let doc_bytes =
+            serde_json::to_vec(doc).map_err(|e| AppError::Internal(e.to_string()))?;
+        docs.insert(id.as_bytes(), &doc_bytes)?;
+        tracing::debug!(collection = %collection, id = %id, tokens = new_words.len(), "item upserted");
         Ok(())
     }
 
-    pub fn upsert(&self, collection: &str, id: &str, content: &str) -> Result<(), AppError> {
-        let id_type = self.validate_collection_exists(collection)?;
-        match id_type {
-            IdType::Number => {
-                id.parse::<u64>().map_err(|_| {
-                    AppError::BadRequest(format!(
-                        "invalid id '{}': collection '{}' expects numeric ids",
-                        id, collection
-                    ))
-                })?;
-            }
-            IdType::String => {}
-        }
+    pub fn upsert(
+        &self,
+        collection: &str,
+        doc: serde_json::Value,
+    ) -> Result<(), AppError> {
+        let meta = self.validate_collection_exists(collection)?;
+        let id = extract_id(&doc, meta.id_type)?;
 
         if !self.background_active.load(Ordering::Acquire) {
-            return self.upsert_internal(collection, id, content);
+            return self.upsert_internal(collection, &id, &doc);
         }
 
         let seq = self.allocate_seq();
         let queue = self.queue_keyspace()?;
+        let doc_bytes =
+            serde_json::to_vec(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
         let entry = config::QueuedIndex {
             collection: collection.to_string(),
             id: id.to_string(),
-            content: content.to_string(),
+            document: doc_bytes,
         };
         queue.insert(seq.to_be_bytes(), &encode_rkyv!(&entry)?)?;
         tracing::debug!(collection = %collection, id = %id, seq = %seq, "item queued for indexing");
@@ -295,7 +355,9 @@ impl Store {
         }
 
         for (key, entry) in &batch {
-            if let Err(e) = self.upsert_internal(&entry.collection, &entry.id, &entry.content) {
+            if let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&entry.document)
+                && let Err(e) = self.upsert_internal(&entry.collection, &entry.id, &doc)
+            {
                 tracing::error!(
                     error = ?e,
                     collection = %entry.collection,
@@ -336,10 +398,10 @@ impl Store {
         sort_desc: bool,
         take: usize,
         after: Option<&str>,
-    ) -> Result<Vec<String>, AppError> {
-        let id_type = self.validate_collection_exists(collection)?;
+    ) -> Result<Vec<serde_json::Value>, AppError> {
+        let meta = self.validate_collection_exists(collection)?;
         let inverted = self.inverted_keyspace(collection)?;
-        let results = match id_type {
+        let ids = match meta.id_type {
             IdType::Number => search::roaring_search(
                 &inverted,
                 self.config.min_token_length,
@@ -357,6 +419,19 @@ impl Store {
                 after,
             )?,
         };
+
+        let docs = self.docs_keyspace(collection)?;
+        let results: Vec<serde_json::Value> = ids
+            .iter()
+            .filter_map(|id| {
+                docs
+                    .get(id.as_bytes())
+                    .ok()
+                    .flatten()
+                    .and_then(|data| serde_json::from_slice(&data).ok())
+            })
+            .collect();
+
         tracing::debug!(collection = %collection, query = %query, results = results.len(), "search completed");
         Ok(results)
     }
@@ -390,34 +465,32 @@ impl Store {
         if self.background_active.load(Ordering::Acquire) {
             self.process_pending_queue()?;
         }
-        let id_type = self.validate_collection_exists(collection)?;
-        let id_u64 = match id_type {
-            IdType::Number => Some(id.parse::<u64>().map_err(|_| {
-                AppError::BadRequest(format!(
-                    "invalid id '{}': collection '{}' expects numeric ids",
-                    id, collection
-                ))
-            })?),
-            IdType::String => None,
-        };
+        let meta = self.validate_collection_exists(collection)?;
 
         let _lock = self.lock.lock().unwrap();
 
         let inverted = self.inverted_keyspace(collection)?;
         let docs = self.docs_keyspace(collection)?;
 
-        let tokens: Vec<String> = match docs.get(id.as_bytes())? {
-            Some(data) => decode_rkyv!(Vec<String>, &data)?,
-            None => return Err(AppError::NotFound(format!("item '{}' not found", id))),
-        };
+        let doc_data = docs
+            .get(id.as_bytes())?
+            .ok_or_else(|| AppError::NotFound(format!("item '{}' not found", id)))?;
+        let doc: serde_json::Value = serde_json::from_slice(&doc_data)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let content = extract_searchable_content(&doc, &meta.searchable_fields);
+        let tokens = tokenize(&content, self.config.min_token_length);
 
         for word in &tokens {
-            match id_type {
-                IdType::Number => posting_list::remove_from_roaring_posting_list(
-                    &inverted,
-                    word,
-                    id_u64.unwrap(),
-                )?,
+            match meta.id_type {
+                IdType::Number => {
+                    let id_u64 = id.parse::<u64>().map_err(|_| {
+                        AppError::BadRequest(format!(
+                            "invalid id '{}': collection '{}' expects numeric ids",
+                            id, collection
+                        ))
+                    })?;
+                    posting_list::remove_from_roaring_posting_list(&inverted, word, id_u64)?;
+                }
                 IdType::String => posting_list::remove_from_posting_list(&inverted, word, id)?,
             }
         }
@@ -428,7 +501,7 @@ impl Store {
     }
 
     pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
-        let id_type = self.validate_collection_exists(collection)?;
+        let meta = self.validate_collection_exists(collection)?;
         let inverted = self.inverted_keyspace(collection)?;
         let docs = self.docs_keyspace(collection)?;
 
@@ -442,9 +515,10 @@ impl Store {
 
         Ok(CollectionInfo {
             name: collection.to_string(),
-            id_type: format!("{:?}", id_type).to_lowercase(),
+            id_type: format!("{:?}", meta.id_type).to_lowercase(),
             document_count: docs.len()?,
             unique_terms,
+            searchable_fields: meta.searchable_fields,
         })
     }
 
@@ -452,9 +526,10 @@ impl Store {
         let map = self.collections.read().unwrap();
         let collections: Vec<CollectionSummary> = map
             .iter()
-            .map(|(name, id_type)| CollectionSummary {
+            .map(|(name, meta)| CollectionSummary {
                 name: name.clone(),
-                id_type: format!("{:?}", id_type).to_lowercase(),
+                id_type: format!("{:?}", meta.id_type).to_lowercase(),
+                searchable_fields: meta.searchable_fields.clone(),
             })
             .collect();
         Ok(ListCollectionsResponse { collections })
@@ -492,6 +567,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn test_store(conf: StoreConfig) -> (Store, tempfile::TempDir) {
         let dir = tempfile::TempDir::new().unwrap();
@@ -505,6 +581,17 @@ mod tests {
 
     fn default_store() -> (Store, tempfile::TempDir) {
         test_store(StoreConfig::default())
+    }
+
+    fn ids(results: &[serde_json::Value]) -> Vec<String> {
+        results
+            .iter()
+            .filter_map(|v| match &v["id"] {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -597,18 +684,29 @@ mod tests {
     #[test]
     fn create_and_list_collections() {
         let (store, _dir) = default_store();
-        store.create_collection("mycol", "string").unwrap();
+        store.create_collection("mycol", "string", &[]).unwrap();
         let list = store.list_collections().unwrap();
         assert_eq!(list.collections.len(), 1);
         assert_eq!(list.collections[0].name, "mycol");
         assert_eq!(list.collections[0].id_type, "string");
+        assert!(list.collections[0].searchable_fields.is_empty());
+    }
+
+    #[test]
+    fn create_collection_with_fields() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string", &["title".into(), "body".into()]).unwrap();
+        let list = store.list_collections().unwrap();
+        assert_eq!(list.collections[0].searchable_fields, vec!["title", "body"]);
+        let info = store.collection_info("docs").unwrap();
+        assert_eq!(info.searchable_fields, vec!["title", "body"]);
     }
 
     #[test]
     fn create_multiple_collections() {
         let (store, _dir) = default_store();
-        store.create_collection("a", "string").unwrap();
-        store.create_collection("b", "number").unwrap();
+        store.create_collection("a", "string", &[]).unwrap();
+        store.create_collection("b", "number", &[]).unwrap();
         let list = store.list_collections().unwrap();
         assert_eq!(list.collections.len(), 2);
     }
@@ -616,54 +714,54 @@ mod tests {
     #[test]
     fn create_duplicate_collection_errors() {
         let (store, _dir) = default_store();
-        store.create_collection("mycol", "string").unwrap();
-        let err = store.create_collection("mycol", "string").unwrap_err();
+        store.create_collection("mycol", "string", &[]).unwrap();
+        let err = store.create_collection("mycol", "string", &[]).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
     #[test]
     fn create_invalid_id_type_errors() {
         let (store, _dir) = default_store();
-        let err = store.create_collection("mycol", "invalid").unwrap_err();
+        let err = store.create_collection("mycol", "invalid", &[]).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
     #[test]
     fn upsert_and_search_string() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["1"]);
+        assert_eq!(ids(&results), vec!["1"]);
     }
 
     #[test]
     fn upsert_and_search_number() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "number").unwrap();
-        store.upsert("docs", "42", "hello world").unwrap();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": 42, "content": "hello world"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["42"]);
+        assert_eq!(ids(&results), vec!["42"]);
     }
 
     #[test]
     fn search_multi_token_intersection() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "apple banana").unwrap();
-        store.upsert("docs", "2", "apple cherry").unwrap();
-        store.upsert("docs", "3", "banana cherry").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "apple banana"})).unwrap();
+        store.upsert("docs", json!({"id": "2", "content": "apple cherry"})).unwrap();
+        store.upsert("docs", json!({"id": "3", "content": "banana cherry"})).unwrap();
         let results = store
             .search("docs", "apple banana", false, 10, None)
             .unwrap();
-        assert_eq!(results, vec!["1"]);
+        assert_eq!(ids(&results), vec!["1"]);
     }
 
     #[test]
     fn search_no_match() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
         let results = store
             .search("docs", "nonexistent", false, 10, None)
             .unwrap();
@@ -673,8 +771,8 @@ mod tests {
     #[test]
     fn search_empty_query() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
         let results = store.search("docs", "", false, 10, None).unwrap();
         assert!(results.is_empty());
     }
@@ -682,52 +780,52 @@ mod tests {
     #[test]
     fn search_sort_asc() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "b", "hello").unwrap();
-        store.upsert("docs", "a", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "b", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "a", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["a", "b"]);
+        assert_eq!(ids(&results), vec!["a", "b"]);
     }
 
     #[test]
     fn search_sort_desc_default() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "a", "hello").unwrap();
-        store.upsert("docs", "b", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "a", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "b", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", true, 10, None).unwrap();
-        assert_eq!(results, vec!["b", "a"]);
+        assert_eq!(ids(&results), vec!["b", "a"]);
     }
 
     #[test]
     fn search_pagination_after() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "a", "hello").unwrap();
-        store.upsert("docs", "b", "hello").unwrap();
-        store.upsert("docs", "c", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "a", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "b", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "c", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, Some("a")).unwrap();
-        assert_eq!(results, vec!["b", "c"]);
+        assert_eq!(ids(&results), vec!["b", "c"]);
     }
 
     #[test]
     fn search_pagination_after_desc() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "a", "hello").unwrap();
-        store.upsert("docs", "b", "hello").unwrap();
-        store.upsert("docs", "c", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "a", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "b", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "c", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", true, 10, Some("c")).unwrap();
-        assert_eq!(results, vec!["b", "a"]);
+        assert_eq!(ids(&results), vec!["b", "a"]);
     }
 
     #[test]
     fn search_take_limit() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "a", "hello").unwrap();
-        store.upsert("docs", "b", "hello").unwrap();
-        store.upsert("docs", "c", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "a", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "b", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "c", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 2, None).unwrap();
         assert_eq!(results.len(), 2);
     }
@@ -735,22 +833,22 @@ mod tests {
     #[test]
     fn upsert_update_reindex() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "apple banana").unwrap();
-        store.upsert("docs", "1", "apple cherry").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "apple banana"})).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "apple cherry"})).unwrap();
         let r1 = store.search("docs", "banana", false, 10, None).unwrap();
         assert!(r1.is_empty());
         let r2 = store.search("docs", "cherry", false, 10, None).unwrap();
-        assert_eq!(r2, vec!["1"]);
+        assert_eq!(ids(&r2), vec!["1"]);
         let r3 = store.search("docs", "apple", false, 10, None).unwrap();
-        assert_eq!(r3, vec!["1"]);
+        assert_eq!(ids(&r3), vec!["1"]);
     }
 
     #[test]
     fn delete_item() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
         store.delete_item("docs", "1").unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert!(results.is_empty());
@@ -759,7 +857,7 @@ mod tests {
     #[test]
     fn delete_nonexistent_item_errors() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
         let err = store.delete_item("docs", "1").unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
     }
@@ -767,20 +865,20 @@ mod tests {
     #[test]
     fn delete_and_reinsert() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello"})).unwrap();
         store.delete_item("docs", "1").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["1"]);
+        assert_eq!(ids(&results), vec!["1"]);
     }
 
     #[test]
     fn suggest_basic() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
-        store.upsert("docs", "2", "helpful tips").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
+        store.upsert("docs", json!({"id": "2", "content": "helpful tips"})).unwrap();
         let suggestions = store.suggest("docs", "hel").unwrap();
         assert!(suggestions.contains(&"helpful".to_string()));
         assert!(suggestions.contains(&"hello".to_string()));
@@ -789,8 +887,8 @@ mod tests {
     #[test]
     fn suggest_no_matches() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
         let suggestions = store.suggest("docs", "xyz").unwrap();
         assert!(suggestions.is_empty());
     }
@@ -805,8 +903,8 @@ mod tests {
     #[test]
     fn collection_info() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello world").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello world"})).unwrap();
         let info = store.collection_info("docs").unwrap();
         assert_eq!(info.name, "docs");
         assert_eq!(info.id_type, "string");
@@ -817,7 +915,7 @@ mod tests {
     #[test]
     fn collection_info_empty() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
         let info = store.collection_info("docs").unwrap();
         assert_eq!(info.document_count, 0);
         assert_eq!(info.unique_terms, 0);
@@ -826,8 +924,8 @@ mod tests {
     #[test]
     fn delete_collection() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello"})).unwrap();
         store.delete_collection("docs").unwrap();
         let list = store.list_collections().unwrap();
         assert!(list.collections.is_empty());
@@ -845,68 +943,68 @@ mod tests {
     #[test]
     fn upsert_on_nonexistent_collection() {
         let (store, _dir) = default_store();
-        let err = store.upsert("nonexistent", "1", "hello").unwrap_err();
+        let err = store.upsert("nonexistent", json!({"id": "1", "content": "hello"})).unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
     }
 
     #[test]
     fn upsert_invalid_numeric_id() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "number").unwrap();
-        let err = store.upsert("docs", "not-a-number", "hello").unwrap_err();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
+        let err = store.upsert("docs", json!({"id": "not-a-number", "content": "hello"})).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
     #[test]
     fn search_number_sort_asc() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "number").unwrap();
-        store.upsert("docs", "3", "hello").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
-        store.upsert("docs", "2", "hello").unwrap();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": 3, "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": 1, "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": 2, "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["1", "2", "3"]);
+        assert_eq!(ids(&results), vec!["1", "2", "3"]);
     }
 
     #[test]
     fn search_number_sort_desc() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "number").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
-        store.upsert("docs", "2", "hello").unwrap();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": 1, "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": 2, "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", true, 10, None).unwrap();
-        assert_eq!(results, vec!["2", "1"]);
+        assert_eq!(ids(&results), vec!["2", "1"]);
     }
 
     #[test]
     fn search_number_pagination() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "number").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
-        store.upsert("docs", "2", "hello").unwrap();
-        store.upsert("docs", "3", "hello").unwrap();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": 1, "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": 2, "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": 3, "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, Some("1")).unwrap();
-        assert_eq!(results, vec!["2", "3"]);
+        assert_eq!(ids(&results), vec!["2", "3"]);
     }
 
     #[test]
     fn upsert_string_idempotent() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "string").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": "1", "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["1"]);
+        assert_eq!(ids(&results), vec!["1"]);
     }
 
     #[test]
     fn upsert_number_idempotent() {
         let (store, _dir) = default_store();
-        store.create_collection("docs", "number").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
-        store.upsert("docs", "1", "hello").unwrap();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
+        store.upsert("docs", json!({"id": 1, "content": "hello"})).unwrap();
+        store.upsert("docs", json!({"id": 1, "content": "hello"})).unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
-        assert_eq!(results, vec!["1"]);
+        assert_eq!(ids(&results), vec!["1"]);
     }
 
     #[test]
@@ -916,9 +1014,9 @@ mod tests {
             ..Default::default()
         };
         let (store, _dir) = test_store(conf);
-        store.create_collection("docs", "string").unwrap();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
         for i in 0..10u64 {
-            store.upsert("docs", &i.to_string(), "hello").unwrap();
+            store.upsert("docs", json!({"id": i.to_string(), "content": "hello"})).unwrap();
         }
         let results = store.search("docs", "hello", false, 20, None).unwrap();
         assert_eq!(results.len(), 10);
@@ -931,11 +1029,48 @@ mod tests {
             ..Default::default()
         };
         let (store, _dir) = test_store(conf);
-        store.create_collection("docs", "number").unwrap();
+        store.create_collection("docs", "number", &["content".into()]).unwrap();
         for i in 0..10u64 {
-            store.upsert("docs", &i.to_string(), "hello").unwrap();
+            store.upsert("docs", json!({"id": i, "content": "hello"})).unwrap();
         }
         let results = store.search("docs", "hello", false, 20, None).unwrap();
         assert_eq!(results.len(), 10);
+    }
+
+    #[test]
+    fn searchable_fields_only_indexed() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string", &["title".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "title": "hello", "body": "world", "ignored": "yes"})).unwrap();
+        // "world" should not be indexed because "body" is not a searchable field
+        let r1 = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(r1.len(), 1);
+        let r2 = store.search("docs", "world", false, 10, None).unwrap();
+        assert!(r2.is_empty());
+        // Full document should include all fields
+        assert_eq!(r1[0]["id"], "1");
+        assert_eq!(r1[0]["title"], "hello");
+        assert_eq!(r1[0]["body"], "world");
+        assert_eq!(r1[0]["ignored"], "yes");
+    }
+
+    #[test]
+    fn upsert_missing_id_errors() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string", &["content".into()]).unwrap();
+        let err = store.upsert("docs", json!({"content": "hello"})).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn search_returns_full_documents() {
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "string", &["title".into(), "body".into()]).unwrap();
+        store.upsert("docs", json!({"id": "1", "title": "hello", "body": "world"})).unwrap();
+        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["id"], "1");
+        assert_eq!(results[0]["title"], "hello");
+        assert_eq!(results[0]["body"], "world");
     }
 }

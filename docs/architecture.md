@@ -51,7 +51,7 @@ The `Store` struct is the heart of Aperio. It holds:
 
 - **`db: fjall::Database`** — the underlying database handle.
 - **`config: StoreConfig`** — tunable parameters (shard sizes, token length, compression, index interval).
-- **`collections: RwLock<HashMap<String, IdType>>`** — in-memory registry of known collections and their ID type.
+- **`collections: RwLock<HashMap<String, CollectionMeta>>`** — in-memory registry of known collections, their ID type and searchable fields.
 - **`lock: Mutex<()>`** — serializes write operations (upsert/delete) for index consistency.
 - **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
 - **`background_active: AtomicBool`** — whether the background indexer is running.
@@ -118,11 +118,11 @@ This batches write operations and reduces lock contention. When the background i
 [fjall](https://github.com/fjall-rs/fjall) is an embedded LSM-tree storage engine (a RocksDB/Sled alternative). Aperio uses these fjall keyspaces:
 
 | Keyspace | Purpose |
-|---|---|
-| `_collections` | Collection name → `IdType` mapping |
+|---|---|---|
+| `_collections` | Collection name → `CollectionMeta` (ID type + searchable fields) |
 | `_index_queue` | Pending index operations (background indexing) |
 | `{name}.inverted` | Inverted index per collection (word → posting lists) |
-| `{name}.docs` | Document tokens per collection (id → `Vec<String>`) |
+| `{name}.docs` | Full JSON documents per collection (id → JSON bytes) |
 
 Configurable fjall options exposed via `StoreConfig`:
 
@@ -151,15 +151,18 @@ Axum's `IntoResponse` impl renders errors as JSON: `{"error": "message"}`.
 ```
 Client → POST /collections/{name}/items
   → routes::upsert_item()
-    → store.upsert(name, id, content)
+    → store.upsert(name, doc)
       → [background active?]
         → Yes: write to _index_queue → return
         → No:  lock() → upsert_internal()
-          → tokenize content (charabia)
-          → load old tokens from {name}.docs
+          → extract `id` from JSON doc
+          → extract searchable field values from JSON doc
+          → tokenize combined searchable content (charabia)
+          → load old JSON from {name}.docs
+          → compute old tokens from old searchable fields
           → remove stale posting list entries
           → add/update posting list entries
-          → store new tokens in {name}.docs
+          → store full JSON doc in {name}.docs
           → unlock()
 ```
 
@@ -177,5 +180,6 @@ Client → GET /collections/{name}/search?q=...
       → [string IDs]: sorted merge + membership check
       → [number IDs]: bitmap union + intersection
       → apply after-cursor, sort, limit
-      → return Vec<String>
+      → look up full JSON docs from {name}.docs
+      → return Vec<serde_json::Value>
 ```

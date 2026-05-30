@@ -80,11 +80,14 @@ async fn create_collection() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "testcol", "id_type": "string"}),
+        json!({"name": "testcol", "id_type": "string", "searchable_fields": []}),
     );
     let (status, body) = send(&app, req).await;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body, json!({"name": "testcol", "id_type": "string"}));
+    assert_eq!(
+        body,
+        json!({"name": "testcol", "id_type": "string", "searchable_fields": []})
+    );
 }
 
 #[tokio::test]
@@ -93,13 +96,13 @@ async fn create_duplicate_collection() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "testcol", "id_type": "string"}),
+        json!({"name": "testcol", "id_type": "string", "searchable_fields": []}),
     );
     send(&app, req).await;
     let req2 = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "testcol", "id_type": "string"}),
+        json!({"name": "testcol", "id_type": "string", "searchable_fields": []}),
     );
     let (status, body) = send(&app, req2).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -112,7 +115,7 @@ async fn create_collection_invalid_id_type() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "testcol", "id_type": "invalid"}),
+        json!({"name": "testcol", "id_type": "invalid", "searchable_fields": []}),
     );
     let (status, body) = send(&app, req).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -126,7 +129,7 @@ async fn upsert_and_search() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -138,7 +141,7 @@ async fn upsert_and_search() {
     send(&app, req).await;
 
     let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
-    assert_eq!(body["results"], json!(["1"]));
+    assert_eq!(body["results"], json!([{"id": "1", "content": "hello world"}]));
     assert_eq!(body["take"], 20);
 }
 
@@ -149,7 +152,7 @@ async fn search_with_pagination() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -167,9 +170,12 @@ async fn search_with_pagination() {
         get_request("/collections/docs/search?q=hello&take=2&sort=asc"),
     )
     .await;
-    assert_eq!(page1["results"], json!(["a", "b"]));
+    assert_eq!(
+        page1["results"],
+        json!([{"id": "a", "content": "hello"}, {"id": "b", "content": "hello"}])
+    );
 
-    let after = page1["results"][1].as_str().unwrap();
+    let after = page1["results"][1]["id"].as_str().unwrap();
     let (_status, page2) = send(
         &app,
         get_request(&format!(
@@ -178,7 +184,7 @@ async fn search_with_pagination() {
         )),
     )
     .await;
-    assert_eq!(page2["results"], json!(["c"]));
+    assert_eq!(page2["results"], json!([{"id": "c", "content": "hello"}]));
 }
 
 #[tokio::test]
@@ -188,7 +194,7 @@ async fn search_sort_asc() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -206,7 +212,10 @@ async fn search_sort_asc() {
         get_request("/collections/docs/search?q=hello&sort=asc"),
     )
     .await;
-    assert_eq!(body["results"], json!(["a", "b"]));
+    assert_eq!(
+        body["results"],
+        json!([{"id": "a", "content": "hello"}, {"id": "b", "content": "hello"}])
+    );
 }
 
 #[tokio::test]
@@ -216,7 +225,7 @@ async fn search_sort_desc() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -234,7 +243,10 @@ async fn search_sort_desc() {
         get_request("/collections/docs/search?q=hello&sort=desc"),
     )
     .await;
-    assert_eq!(body["results"], json!(["b", "a"]));
+    assert_eq!(
+        body["results"],
+        json!([{"id": "b", "content": "hello"}, {"id": "a", "content": "hello"}])
+    );
 }
 
 #[tokio::test]
@@ -244,7 +256,7 @@ async fn suggest_endpoint() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -271,7 +283,7 @@ async fn delete_item_endpoint() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -295,7 +307,7 @@ async fn delete_nonexistent_item() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -310,7 +322,7 @@ async fn collection_info_endpoint() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -326,6 +338,7 @@ async fn collection_info_endpoint() {
     assert_eq!(body["id_type"], "string");
     assert_eq!(body["document_count"], 1);
     assert_eq!(body["unique_terms"], 2);
+    assert_eq!(body["searchable_fields"], json!(["content"]));
 }
 
 #[tokio::test]
@@ -335,7 +348,7 @@ async fn delete_collection_endpoint() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "docs", "id_type": "string"}),
+        json!({"name": "docs", "id_type": "string", "searchable_fields": []}),
     );
     send(&app, req).await;
     send(&app, delete_request("/collections/docs")).await;
@@ -379,14 +392,14 @@ async fn list_collections_after_create() {
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "a", "id_type": "string"}),
+        json!({"name": "a", "id_type": "string", "searchable_fields": []}),
     );
     send(&app, req).await;
 
     let req = json_request(
         Method::POST,
         "/collections",
-        json!({"name": "b", "id_type": "number"}),
+        json!({"name": "b", "id_type": "number", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
 
@@ -404,4 +417,29 @@ async fn create_collection_missing_fields() {
     let req = json_request(Method::POST, "/collections", json!({}));
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn upsert_with_numeric_id() {
+    let (app, _dir) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "number", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": 42, "content": "hello world"}),
+    );
+    send(&app, req).await;
+
+    let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
+    assert_eq!(
+        body["results"],
+        json!([{"id": 42, "content": "hello world"}])
+    );
 }
