@@ -18,7 +18,8 @@ Response: `200 OK`
     {"id": "01HPT7B2X...", "title": "Hello", "body": "..."},
     {"id": "01HQ8C3Y...", "title": "World", "body": "..."}
   ],
-  "take": 20
+  "take": 20,
+  "elapsed_ms": 1.234
 }
 ```
 
@@ -46,5 +47,6 @@ Search results return the full stored document for each match, including all fie
 |---|---|---|
 | `results` | `array` of `object` | Matching documents (full stored JSON objects) |
 | `take` | `integer` | Number of results returned |
+| `elapsed_ms` | `number` | Time spent executing the search, in milliseconds |
 
 **Response:** `200 OK`
