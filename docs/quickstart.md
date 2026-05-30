@@ -29,6 +29,15 @@ Once the server is running, create a collection and start searching.
 ::: code-group
 
 ```js [Node.js]
+// npm install @aperio-search/aperio
+
+import { AperioClient } from "@aperio-search/aperio";
+
+const client = new AperioClient({
+  baseUrl: "http://localhost:3000",
+  apiKey: "SecretApiKey",
+});
+
 await client.createCollection({
   name: "movies",
   idType: "string",
