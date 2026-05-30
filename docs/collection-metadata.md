@@ -1,4 +1,4 @@
-# Getting Collection Info
+# Collection Metadata
 
 Returns metadata about the collection, including the number of indexed documents and unique terms in the inverted index.
 

@@ -26,7 +26,7 @@ export default defineConfig({
           { text: "Autocomplete", link: "/autocomplete" },
           { text: "Deleting Collections", link: "/deleting-collections" },
           { text: "Listing Collections", link: "/listing-collections" },
-          { text: "Getting Collection Info", link: "/getting-collection-info" },
+          { text: "Collection Metadata", link: "/collection-metadata" },
           { text: "Performance", link: "/performance" },
           { text: "Deploying", link: "/deploying" },
           { text: "Configuration", link: "/configuration" },

@@ -1,191 +1,89 @@
-# Aperio
+<h1 align="center">Aperio</h1>
 
-[![License](https://img.shields.io/badge/license-Elastic-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
+<p align="center">
+<a href="https://github.com/aperio-search/aperio"><img src="https://img.shields.io/badge/aperio-Screamingly%20fast-red" alt="Aperio" height=50></a>
+<img src="https://img.shields.io/github/stars/aperio-search/aperio" alt="stars">
+<img src="https://img.shields.io/badge/language-Rust-orange" alt="Rust">
+</p>
 
-An extremely lightweight search engine, heavy optimized for SSDs, built on Rust and Sled.
+<div align="center">
+  <a href="https://aperiosearch.com/quickstart.html">Quickstart</a>
+  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
+  <a href="https://aperiosearch.com/about.html">About</a>
+  <br />
+</div>
 
-Aperio organizes search terms into isolated collections (e.g., `posts` for a blog, or `user_messages:1` for specific user data). It is designed for high-throughput, simple full-text search indexing without the overhead of heavy, external search clusters.
+### [Read the docs →](https://github.com/aperio-search/aperio#readme)
 
-- **Lightweight:** Minimal memory footprint, running entirely embedded within your application environment.
-- **No Complex Querying:** No filtering, complex aggregations, or heavy boolean logic—just pure, blazing-fast term matching.
-- **Sorted Out-of-the-Box:** Results are sorted by document ID (lexicographically). Defaulting to `DESC`, with optional `ASC` retrieval.
-- **Disk-Backed Storage:** Leveraging `sled` for zero-copy, concurrent, thread-safe transactional key-value storage.
+## What is Aperio?
 
-> Aperio is highly optimized for SSDs as it stores all data on disk. Running Aperio on a traditional HDD will result in severely degraded search performance.
+Aperio is an screamingly fast, ultra-lean search engine built on top of [fjall](https://github.com/fjall-rs/fjall) and powered by Rust. It's designed as **a lightweight alternative to Elasticsearch** for applications that need ultra-low latency search keeping memory usage minimal even with massive datasets.
 
-## Table of Contents
+## Features
 
-- [Architecture](#architecture)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Endpoints](#endpoints)
-- [Performance Optimization](#performance-optimization)
-- [Local Development](#local-development)
-- [License](#license)
+- **Screamingly Fast**: Engineered for performance, delivering ultra-low latency search results.
+- **Low RAM Footprint**: Highly resource-efficient, keeping memory usage minimal even with massive datasets.
+- **Autocomplete**: Built-in autocomplete endpoint to provide real-time suggestions as users type.
+- **Full Unicode Support**: Built-in normalization and encoding compatibility to handle global data flawlessly.
+- **DevOps-Free**: Easy to deploy, configure, and maintain without needing dedicated DevOps expertise.
 
-## Architecture
+## Install
 
-Aperio utilizes a two-layer key-value layout inside `sled` to handle inversion and retrieval:
+Aperio runs on Linux (x64 & arm64) and macOS (x64 & Apple Silicon).
 
-1. **Inverted Index Store:** Maps individual tokens/words to an ascending list of document IDs (`word -> [id1, id2, ...]`).
-2. **Token Store:** Maps the original document ID to its pre-computed token array (`id -> ["rust", "sled", ...]`), used for efficient cleanups and deletions without re-tokenizing.
+### Docker
 
-When an item is deleted, Aperio reads the stored token set, purges the ID from the Inverted Index for each token, and finally drops the item from the Token Store.
+```bash
+docker build -t aperio .
+docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" aperio
+```
 
-### Tokenization & Normalization
+### Build from source
 
-Aperio processes text through two stages before indexing and searching:
+```bash
+git clone https://github.com/aperio-search/aperio.git
+cd aperio
+cargo build --release
+./target/release/aperio
+```
 
-1. **Normalization:** Applies Unicode NFKD decomposition (e.g., `é` → `e` + combining accent), strips combining marks, lowercases the result, and removes non-alphanumeric characters. This makes searches case-insensitive and accent-insensitive, and ensures punctuation like `"hello,"` matches `"hello"`.
+## Quickstart
 
-2. **Tokenization:** Splits the normalized text on whitespace and discards tokens shorter than the minimum length (default: 2 characters). Short noise words like `"a"` or `"I"` are excluded from the index and search queries.
-
-These settings are configurable via `StoreConfig` when initializing the store in code. By default, punctuation stripping is enabled and the minimum token length is 2.
-
-## Installation
-
-```shell
-# Build and run the binary
+```bash
 cargo run --release
+# server starts on http://0.0.0.0:3000
 
+# create a collection
+curl -X POST http://localhost:3000/collections \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"posts","id_type":"string"}'
+
+# index a document
+curl -X POST http://localhost:3000/collections/posts/items \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"1","content":"Hello world from Aperio"}'
+
+# search
+curl "http://localhost:3000/collections/posts/search?q=hello&take=10"
 ```
 
-## Usage
+## Quick links
 
-Collections allow you to partition data logically. You can name collections statically (`posts`) or dynamically per entity (`user_messages:123`).
+- Search
+  - [Inserting items](https://aperiosearch.com/inserting-items.html)
+  - [Searching](https://aperiosearch.com/search.html)
+  - [Autocomplete / suggest](https://aperiosearch.com/autocomplete.html)
+  - [Delete items](https://aperiosearch.com/deleting-items.html)
 
-### Document ID Recommendation
+- Collections
+  - [Create a collection](https://aperiosearch.com/creating-collections.html)
+  - [Collection metadata](https://aperiosearch.com/collection-metadata.html)
+  - [List collections](https://aperiosearch.com/listing-collections.html)
+  - [Delete a collection](https://aperiosearch.com/listing-collections.html)
 
-Because Aperio sorts results by your provided document IDs, using **lexicographically sortable IDs** (such as `ULID`, `UUIDv7`, or zero-padded integers like `000001`) is highly recommended to ensure predictable `ASC`/`DESC` ordering and maximum performance.
+- Configuration
+  - [Environment variables (`DATA_DIR`, `CONFIG_FILE`)](https://aperiosearch.com/configuration.html)
 
----
+## Contributing
 
-## Endpoints
-
-### 1. Upsert Item
-
-`POST /collections/:collection/items`
-
-Inserts or updates an item in the specified collection.
-
-**Request Body:**
-
-```json
-{
-  "id": "01HPT7B2X...",
-  "content": "Rust and sled make a powerful, lightweight combination for embedded databases."
-}
-
-```
-
-**Response:** `200 OK`
-
-### 2. Search Collection
-
-`GET /collections/:collection/search?q=query_term&sort=desc&take=20&after=`
-
-Multi-word queries perform an **AND** search — only documents matching all terms are returned. Accented characters are normalized (`á` → `a`), making searches case- and accent-insensitive.
-
-**Query Parameters:**
-
-| Param | Default | Description |
-|---|---|---|
-| `q` | — | Search query (one or more terms, space-separated) |
-| `sort` | `desc` | Sort order: `asc` or `desc` |
-| `take` | `20` | Max results to return (clamped 1–100) |
-| `after` | — | Exclusive cursor ID for cursor-based pagination |
-
-**Cursor-based pagination:** Omit `after` for the first page, then pass the last result's `id` as `after` for subsequent pages. In `desc` mode, `after` filters IDs lower than the cursor; in `asc` mode, it filters IDs higher.
-
-**Response:** `200 OK`
-
-```json
-{
-  "results": ["01HPT7B2X...", "01HQ8C3Y..."],
-  "take": 20
-}
-
-```
-
-### 3. Suggest Words
-
-`GET /collections/:collection/suggest?q=prefix`
-
-Returns word-level autocomplete suggestions based on the last word in the query. Suggestions match indexed words by prefix — they do **not** consider sentence or phrase context. For example, searching `"application pro"` will suggest completions for `"pro"` (e.g. `"programming"`, `"process"`).
-
-| Param | Default | Description |
-|---|---|---|
-| `q` | — | Word prefix to match (uses the last word if multiple) |
-
-**Response:** `200 OK`
-
-```json
-{
-  "suggestions": ["apple", "application", "apricot"]
-}
-```
-
-### 4. Delete Item
-
-`DELETE /collections/:collection/items/:id`
-
-Removes the document from both the internal store and reverses its token mappings in the inverted index.
-
-**Response:** `200 OK`
-
-### 5. Collection Info
-
-`GET /collections/:collection`
-
-Returns metadata about the collection, including the number of indexed documents and unique terms in the inverted index.
-
-**Response:** `200 OK`
-
-```json
-{
-  "name": "posts",
-  "document_count": 42,
-  "unique_terms": 318
-}
-```
-
-### 6. Delete Collection
-
-`DELETE /collections/:collection`
-
-Drops an entire collection index and its associated internal storage completely.
-
-**Response:** `200 OK`
-
----
-
-## Performance Optimization
-
-* **SSD Native:** `sled` uses a log-structured architecture that avoids random write overhead, turning random operations into sequential disk writes, making it ideal for SSD flash memory.
-* **Zero-Copy Serialization:** Internal storage uses efficient binary serialization to keep CPU overhead near zero during document ingestion and retrieval.
-* **Fast Cleanups:** Pre-computed token sets are stored per document, so deletion doesn't require re-tokenizing content — it reads the cached tokens and removes the ID from each token's posting list directly.
-
-### Concurrency
-
-Aperio uses **sled's `compare_and_swap` (CAS)** for all inverted index mutations to provide **lock-free, per-key atomicity** under concurrent requests. Every upsert and delete that modifies a word's posting list performs an atomic CAS cycle — the list is read, modified in memory, and written back only if the key hasn't changed since the read. On conflict, the operation retries immediately.
-
-This guarantees:
-- **No lost updates** — concurrent inserts for the same word never overwrite each other
-- **No blocking** — no mutex contention; retries are lightweight in-memory operations
-- **Per-key granularity** — different words never contend
-
-## Local Development
-
-Requires the [Rust toolchain](https://rustup.rs/).
-
-```shell
-cargo check     # Validate code compilation
-cargo test      # Run the internal test suite
-cargo run       # Start Aperio in development mode
-
-```
-
-## License
-
-This project is licensed under the Elastic License - see the [LICENSE](LICENSE) file for details.
+See [CONTRIBUTING](https://github.com/aperio-search/aperio/blob/main/CONTRIBUTING.md) to get started.
