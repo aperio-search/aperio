@@ -16,20 +16,35 @@ export default defineConfig({
     },
     sidebar: [
       {
-        text: "Examples",
+        text: "Getting Started",
         items: [
           { text: "Quickstart", link: "/quickstart" },
+        ],
+      },
+      {
+        text: "Guides",
+        items: [
           { text: "Creating Collections", link: "/creating-collections" },
           { text: "Inserting Items", link: "/inserting-items" },
           { text: "Deleting Items", link: "/deleting-items" },
-          { text: "Search", link: "/search" },
-          { text: "Autocomplete", link: "/autocomplete" },
+          { text: "Searching Documents", link: "/searching-documents" },
+          { text: "Autocomplete Suggestions", link: "/autocomplete-suggestions" },
           { text: "Deleting Collections", link: "/deleting-collections" },
           { text: "Listing Collections", link: "/listing-collections" },
-          { text: "Collection Metadata", link: "/collection-metadata" },
-          { text: "Performance", link: "/performance" },
-          { text: "Deploying", link: "/deploying" },
+          { text: "Viewing Collection Metadata", link: "/viewing-collection-metadata" },
+          { text: "Deploying Aperio", link: "/deploying-aperio" },
+        ],
+      },
+      {
+        text: "Reference",
+        items: [
           { text: "Configuration", link: "/configuration" },
+          { text: "Performance", link: "/performance" },
+        ],
+      },
+      {
+        text: "About",
+        items: [
           { text: "About", link: "/about" },
         ],
       },

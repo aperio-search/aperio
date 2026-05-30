@@ -1,4 +1,4 @@
-# Search
+# Searching Documents
 
 Multi-word queries perform an `AND` search. Only documents matching all terms are returned.
 
