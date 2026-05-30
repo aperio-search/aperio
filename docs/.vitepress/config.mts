@@ -24,30 +24,39 @@ export default defineConfig({
       {
         text: "Guides",
         items: [
-          { text: "Creating Collections", link: "/creating-collections" },
-          { text: "Inserting Items", link: "/inserting-items" },
-          { text: "Deleting Items", link: "/deleting-items" },
+          {
+            text: "Collections Management",
+            items: [
+              { text: "Creating Collections", link: "/creating-collections" },
+              { text: "Listing Collections", link: "/listing-collections" },
+              { text: "Viewing Collection Metadata", link: "/viewing-collection-metadata" },
+              { text: "Deleting Collections", link: "/deleting-collections" },
+            ],
+          },
+          {
+            text: "Items Management",
+            items: [
+              { text: "Inserting Items", link: "/inserting-items" },
+              { text: "Deleting Items", link: "/deleting-items" },
+            ],
+          },
           { text: "Searching Documents", link: "/searching-documents" },
           { text: "Autocomplete Suggestions", link: "/autocomplete-suggestions" },
-          { text: "Deleting Collections", link: "/deleting-collections" },
-          { text: "Listing Collections", link: "/listing-collections" },
-          { text: "Viewing Collection Metadata", link: "/viewing-collection-metadata" },
-          { text: "Deploying Aperio", link: "/deploying-aperio" },
+          { text: "Deploying", link: "/deploying" },
         ],
       },
       {
         text: "Reference",
         items: [
           { text: "Configuration", link: "/configuration" },
+          { text: "Environment Variables", link: "/environment-variables" },
           { text: "Performance", link: "/performance" },
+          { text: "API Reference", link: "/api-reference" },
+          { text: "Error Handling", link: "/error-handling" },
+          { text: "Status", link: "/status" },
         ],
       },
-      {
-        text: "About",
-        items: [
-          { text: "About", link: "/about" },
-        ],
-      },
+      { text: "About", link: "/about" },
     ],
     search: {
       provider: "local",
