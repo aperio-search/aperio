@@ -1,6 +1,6 @@
 # Searching Documents
 
-Multi-word queries perform an `AND` search. Only documents matching all terms are returned.
+Multi-word queries perform an `AND` search. Only documents matching all terms are returned. Results include the full stored JSON document for each match.
 
 ## Cursor-based pagination
 
@@ -14,12 +14,15 @@ Response: `200 OK`
 
 ```json
 {
-  "results": ["01HPT7B2X...", "01HQ8C3Y..."],
+  "results": [
+    {"id": "01HPT7B2X...", "title": "Hello", "body": "..."},
+    {"id": "01HQ8C3Y...", "title": "World", "body": "..."}
+  ],
   "take": 20
 }
 ```
 
-Search results return object identifiers that can be resolved from your external database. This reduces storage consumption and avoids duplicate data in your main database and search engine.
+Search results return the full stored document for each match, including all fields that were provided at upsert time.
 
 ## Endpoint Definition
 
@@ -41,7 +44,7 @@ Search results return object identifiers that can be resolved from your external
 
 | Field | Type | Description |
 |---|---|---|
-| `results` | `array` of `string` | Matching document IDs |
+| `results` | `array` of `object` | Matching documents (full stored JSON objects) |
 | `take` | `integer` | Number of results returned |
 
 **Response:** `200 OK`

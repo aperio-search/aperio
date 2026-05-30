@@ -1,6 +1,6 @@
 # Inserting Items
 
-Inserts or updates an item in the specified collection.
+Inserts or updates an item in the specified collection. The request body must be a JSON object with an `id` field matching the collection's `id_type`. Only fields listed in the collection's `searchable_fields` are indexed; all other fields are stored but ignored by the search index.
 
 ## Example
 
@@ -11,7 +11,8 @@ Request Body:
 ```json
 {
   "id": "01HPT7B2X...",
-  "content": "Lorem ipsum dolor sit amet, consectetur adipiscing elit..."
+  "title": "Hello World",
+  "body": "Lorem ipsum dolor sit amet..."
 }
 ```
 
@@ -29,9 +30,11 @@ Response: `200 OK`
 
 ### Request Body
 
-| Param | Type | Description |
+The request body is an arbitrary JSON object. It **must** contain an `id` field matching the collection's `id_type`. All other fields are stored as-is. Only fields listed in the collection's `searchable_fields` param are tokenized and indexed for search.
+
+| Field | Type | Description |
 |---|---|---|
-| `id` | `string` | Item ID |
-| `content` | `string` | Item content to index |
+| `id` | `string` or `number` | Item ID (must match the collection's `id_type`) |
+| `…` | any | Any other JSON fields; only searchable fields are indexed |
 
 **Response:** `200 OK` (no response body)

@@ -15,7 +15,7 @@ docker run -e DATA_DIR=/data -p 3000:3000 --name aperio andresribeiro/aperio
 ```
 
 | Param | Description
-|---|---
+|---|---|
 | `-e DATA_DIR=/data` | Defines the internal directory where Aperio will persist its search index and data files.
 | `-p 3000:3000` | Exposes the Aperio API, mapping port 3000 of the container to port 3000.
 | `--name aperio` | Assigns a memorable, custom name to the container for easier management.
@@ -27,25 +27,25 @@ Aperio will be reachable on `http://localhost:3000`.
 Once the server is running, create a collection and start searching in seconds.
 
 ```sh
-# Create a collection that uses string IDs
+# Create a collection that uses string IDs, with "title" as the searchable field
 curl -X POST http://localhost:3000/collections \
   -H "Content-Type: application/json" \
-  -d '{"name": "movies", "id_type": "string"}'
+  -d '{"name": "movies", "id_type": "string", "searchable_fields": ["title"]}'
 
 # Insert a few documents
 curl -X POST http://localhost:3000/collections/movies/items \
   -H "Content-Type: application/json" \
-  -d '{"id": "1", "content": "the empire strikes back"}'
+  -d '{"id": "1", "title": "the empire strikes back"}'
 
 curl -X POST http://localhost:3000/collections/movies/items \
   -H "Content-Type: application/json" \
-  -d '{"id": "2", "content": "star wars a new hope"}'
+  -d '{"id": "2", "title": "star wars a new hope"}'
 
 curl -X POST http://localhost:3000/collections/movies/items \
   -H "Content-Type: application/json" \
-  -d '{"id": "3", "content": "return of the jedi"}'
+  -d '{"id": "3", "title": "return of the jedi"}'
 
-# Search for "star" — returns documents 1, 2, and 3
+# Search for "star" — returns the full matching document(s)
 curl "http://localhost:3000/collections/movies/search?q=star"
 
 # Autocomplete "emp" — returns "empire"

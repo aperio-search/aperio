@@ -5,18 +5,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upsert_request_roundtrip() {
-        let json = r#"{"id":"doc1","content":"hello world"}"#;
-        let req: UpsertRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.id, "doc1");
-        assert_eq!(req.content, "hello world");
-        let _ = serde_json::to_string(&UpsertRequest {
-            id: "x".into(),
-            content: "y".into(),
-        });
-    }
-
-    #[test]
     fn search_params_defaults() {
         let json = r#"{"q":"test"}"#;
         let params: SearchParams = serde_json::from_str(json).unwrap();
@@ -39,11 +27,11 @@ mod tests {
     #[test]
     fn search_response_serialize() {
         let resp = SearchResponse {
-            results: vec!["a".into(), "b".into()],
+            results: vec![serde_json::json!({"id": "a"}), serde_json::json!({"id": "b"})],
             take: 2,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"results":["a","b"],"take":2}"#);
+        assert_eq!(json, r#"{"results":[{"id":"a"},{"id":"b"}],"take":2}"#);
     }
 
     #[test]
@@ -58,10 +46,11 @@ mod tests {
 
     #[test]
     fn create_collection_request_roundtrip() {
-        let json = r#"{"name":"mycol","id_type":"string"}"#;
+        let json = r#"{"name":"mycol","id_type":"string","searchable_fields":["title","body"]}"#;
         let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.name, "mycol");
         assert_eq!(req.id_type, "string");
+        assert_eq!(req.searchable_fields, vec!["title", "body"]);
     }
 
     #[test]
@@ -71,11 +60,12 @@ mod tests {
             id_type: "string".into(),
             document_count: 10,
             unique_terms: 42,
+            searchable_fields: vec!["title".into()],
         };
         let json = serde_json::to_string(&info).unwrap();
         assert_eq!(
             json,
-            r#"{"name":"c","id_type":"string","document_count":10,"unique_terms":42}"#
+            r#"{"name":"c","id_type":"string","document_count":10,"unique_terms":42,"searchable_fields":["title"]}"#
         );
     }
 
@@ -91,10 +81,14 @@ mod tests {
             collections: vec![CollectionSummary {
                 name: "a".into(),
                 id_type: "number".into(),
+                searchable_fields: vec!["body".into()],
             }],
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"collections":[{"name":"a","id_type":"number"}]}"#);
+        assert_eq!(
+            json,
+            r#"{"collections":[{"name":"a","id_type":"number","searchable_fields":["body"]}]}"#
+        );
     }
 
     #[test]
@@ -112,12 +106,13 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(json, r#"{"suggestions":["hello","help"]}"#);
     }
-}
 
-#[derive(Serialize, Deserialize)]
-pub struct UpsertRequest {
-    pub id: String,
-    pub content: String,
+    #[test]
+    fn create_collection_request_fields_default() {
+        let json = r#"{"name":"mycol","id_type":"string","searchable_fields":[]}"#;
+        let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
+        assert!(req.searchable_fields.is_empty());
+    }
 }
 
 #[derive(Deserialize)]
@@ -130,7 +125,7 @@ pub struct SearchParams {
 
 #[derive(Serialize)]
 pub struct SearchResponse {
-    pub results: Vec<String>,
+    pub results: Vec<serde_json::Value>,
     pub take: usize,
 }
 
@@ -153,12 +148,14 @@ pub struct StatusResponse {
 pub struct CreateCollectionRequest {
     pub name: String,
     pub id_type: String,
+    pub searchable_fields: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
 pub struct CollectionCreated {
     pub name: String,
     pub id_type: String,
+    pub searchable_fields: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -167,12 +164,14 @@ pub struct CollectionInfo {
     pub id_type: String,
     pub document_count: usize,
     pub unique_terms: usize,
+    pub searchable_fields: Vec<String>,
 }
 
 #[derive(Serialize)]
 pub struct CollectionSummary {
     pub name: String,
     pub id_type: String,
+    pub searchable_fields: Vec<String>,
 }
 
 #[derive(Serialize)]

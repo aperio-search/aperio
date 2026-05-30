@@ -9,7 +9,7 @@ use tower_http::trace::TraceLayer;
 use crate::error::AppError;
 use crate::models::{
     CollectionCreated, CollectionInfo, CreateCollectionRequest, ListCollectionsResponse,
-    SearchParams, SearchResponse, StatusResponse, SuggestParams, SuggestResponse, UpsertRequest,
+    SearchParams, SearchResponse, StatusResponse, SuggestParams, SuggestResponse,
 };
 use crate::store::Store;
 
@@ -55,16 +55,19 @@ async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Result<(StatusCode, Json<CollectionCreated>), AppError> {
-    let created = state.store.create_collection(&body.name, &body.id_type)?;
+    let created =
+        state
+            .store
+            .create_collection(&body.name, &body.id_type, &body.searchable_fields)?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
 async fn upsert_item(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
-    Json(body): Json<UpsertRequest>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<StatusCode, AppError> {
-    state.store.upsert(&collection, &body.id, &body.content)?;
+    state.store.upsert(&collection, body)?;
     Ok(StatusCode::OK)
 }
 
