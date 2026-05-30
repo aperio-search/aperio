@@ -10,22 +10,50 @@ Omit `after` for the first page, then pass the last result's `id` as `after` for
 
 ## Example
 
-`GET /collections/{collection_name}/search?q=query_term`
+Search results return the full stored document for each match, including all fields that were provided at upsert time.
 
-Response: `200 OK`
+::: code-group
 
-```json
-{
-  "results": [
-    {"id": "01HPT7B2X...", "title": "Hello", "body": "..."},
-    {"id": "01HQ8C3Y...", "title": "World", "body": "..."}
-  ],
-  "take": 20,
-  "elapsed_ms": 1.234
-}
+```js [Node.js]
+const { results, take, elapsed_ms } = await client.search("posts", {
+  q: "hello world",
+  sort: "asc",
+  take: 50,
+  after: "01HQ8C3Y",
+});
 ```
 
-Search results return the full stored document for each match, including all fields that were provided at upsert time.
+```js [Fetch]
+const params = new URLSearchParams({
+  q: "hello world",
+  sort: "asc",
+  take: "50",
+  after: "01HQ8C3Y",
+});
+const res = await fetch(`http://localhost:3000/collections/posts/search?${params}`, {
+  headers: { Authorization: "SecretApiKey" },
+});
+const { results, take, elapsed_ms } = await res.json();
+```
+
+```sh [cURL]
+# GET /collections/{collection_name}/search?q=query_term
+#
+# Response: 200 OK
+# {
+#   "results": [
+#     {"id": "01HPT7B2X...", "title": "Hello", "body": "..."},
+#     {"id": "01HQ8C3Y...", "title": "World", "body": "..."}
+#   ],
+#   "take": 20,
+#   "elapsed_ms": 1.234
+# }
+
+curl "http://localhost:3000/collections/posts/search?q=hello+world&sort=asc&take=50&after=01HQ8C3Y" \
+  -H "Authorization: SecretApiKey"
+```
+
+:::
 
 ## Endpoint Definition
 

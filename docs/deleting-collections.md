@@ -6,9 +6,29 @@ Drops an entire collection index and its associated internal storage completely.
 
 ## Example
 
-`DELETE /collections/{collection_name}`
+::: code-group
 
-Response: `200 OK`
+```js [Node.js]
+await client.deleteCollection("posts");
+```
+
+```js [Fetch]
+await fetch("http://localhost:3000/collections/posts", {
+  method: "DELETE",
+  headers: { Authorization: "SecretApiKey" },
+});
+```
+
+```sh [cURL]
+# DELETE /collections/{collection_name}
+#
+# Response: 200 OK
+
+curl -X DELETE http://localhost:3000/collections/posts \
+  -H "Authorization: SecretApiKey"
+```
+
+:::
 
 ## Endpoint Definition
 

@@ -6,19 +6,50 @@ Inserts or updates an item in the specified collection. The request body must be
 
 ## Example
 
-`POST /collections/{collection_name}/items`
+::: code-group
 
-Request Body:
-
-```json
-{
-  "id": "01HPT7B2X...",
-  "title": "Hello World",
-  "body": "Lorem ipsum dolor sit amet..."
-}
+```js [Node.js]
+await client.upsertItem("posts", {
+  id: "01HPT7B2X",
+  title: "Hello World",
+  body: "Lorem ipsum dolor sit amet...",
+});
 ```
 
-Response: `200 OK`
+```js [Fetch]
+await fetch("http://localhost:3000/collections/posts/items", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: "SecretApiKey",
+  },
+  body: JSON.stringify({
+    id: "01HPT7B2X",
+    title: "Hello World",
+    body: "Lorem ipsum dolor sit amet...",
+  }),
+});
+```
+
+```sh [cURL]
+# POST /collections/{collection_name}/items
+#
+# Request Body:
+# {
+#   "id": "01HPT7B2X...",
+#   "title": "Hello World",
+#   "body": "Lorem ipsum dolor sit amet..."
+# }
+#
+# Response: 200 OK
+
+curl -X POST http://localhost:3000/collections/posts/items \
+  -H "Content-Type: application/json" \
+  -H "Authorization: SecretApiKey" \
+  -d '{"id": "01HPT7B2X", "title": "Hello World", "body": "Lorem ipsum dolor sit amet..."}'
+```
+
+:::
 
 > [!WARNING]
 > For better performance, use sequential IDs (auto-incrementing integers, UUIDv7, ULID...). Using completely random IDs will significantly slow down the writing speed.

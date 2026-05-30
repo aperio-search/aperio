@@ -11,19 +11,51 @@ A `Collection` must be created before you can insert any data. During creation, 
 
 ## Example
 
-`POST /collections`
+::: code-group
 
-Request Body:
-
-```json
-{
-  "name": "messages",
-  "id_type": "number",
-  "searchable_fields": ["title", "body"]
-}
+```js [Node.js]
+const collection = await client.createCollection({
+  name: "messages",
+  idType: "number",
+  searchableFields: ["title", "body"],
+});
+// { name: "messages", id_type: "number", searchable_fields: ["title", "body"] }
 ```
 
-Response: `201 { "name": "…", "id_type": "…", "searchable_fields": ["…"] }`
+```js [Fetch]
+await fetch("http://localhost:3000/collections", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: "SecretApiKey",
+  },
+  body: JSON.stringify({
+    name: "messages",
+    id_type: "number",
+    searchable_fields: ["title", "body"],
+  }),
+});
+```
+
+```sh [cURL]
+# POST /collections
+#
+# Request Body:
+# {
+#   "name": "messages",
+#   "id_type": "number",
+#   "searchable_fields": ["title", "body"]
+# }
+#
+# Response: 201 { "name": "…", "id_type": "…", "searchable_fields": ["…"] }
+
+curl -X POST http://localhost:3000/collections \
+  -H "Content-Type: application/json" \
+  -H "Authorization: SecretApiKey" \
+  -d '{"name": "messages", "id_type": "number", "searchable_fields": ["title", "body"]}'
+```
+
+:::
 
 ## Endpoint Definition
 

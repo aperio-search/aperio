@@ -6,18 +6,36 @@ Returns metadata about the collection, including the number of indexed documents
 
 ## Example
 
-`GET /collections/{collection_name}`
+::: code-group
 
-Response: `200 OK`
-
-```json
-{
-  "name": "posts",
-  "id_type": "number",
-  "document_count": 42,
-  "unique_terms": 318
-}
+```js [Node.js]
+const meta = await client.getCollection("posts");
+// { name: "posts", id_type: "number", document_count: 42, unique_terms: 318 }
 ```
+
+```js [Fetch]
+const res = await fetch("http://localhost:3000/collections/posts", {
+  headers: { Authorization: "SecretApiKey" },
+});
+const meta = await res.json();
+```
+
+```sh [cURL]
+# GET /collections/{collection_name}
+#
+# Response: 200 OK
+# {
+#   "name": "posts",
+#   "id_type": "number",
+#   "document_count": 42,
+#   "unique_terms": 318
+# }
+
+curl http://localhost:3000/collections/posts \
+  -H "Authorization: SecretApiKey"
+```
+
+:::
 
 ## Endpoint Definition
 

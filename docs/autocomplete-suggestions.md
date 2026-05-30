@@ -8,15 +8,33 @@ Returns autocomplete suggestions based on the last word in the query. For exampl
 
 ## Example
 
-`GET /collections/{collection_name}/suggest?q=app`
+::: code-group
 
-Response: `200 OK`
-
-```json
-{
-  "suggestions": ["apple", "application", "apricot"]
-}
+```js [Node.js]
+const { suggestions } = await client.suggest("posts", { q: "app" });
+// ["apple", "application", "apricot"]
 ```
+
+```js [Fetch]
+const res = await fetch("http://localhost:3000/collections/posts/suggest?q=app", {
+  headers: { Authorization: "SecretApiKey" },
+});
+const { suggestions } = await res.json();
+```
+
+```sh [cURL]
+# GET /collections/{collection_name}/suggest?q=app
+#
+# Response: 200 OK
+# {
+#   "suggestions": ["apple", "application", "apricot"]
+# }
+
+curl "http://localhost:3000/collections/posts/suggest?q=app" \
+  -H "Authorization: SecretApiKey"
+```
+
+:::
 
 ## Endpoint Definition
 
