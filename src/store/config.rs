@@ -49,6 +49,7 @@ pub struct StoreConfig {
     pub write_buffer_size: Option<u64>,
     pub compression: Option<fjall::CompressionType>,
     pub index_interval: Duration,
+    pub max_queue_batch_size: usize,
 }
 
 impl Default for StoreConfig {
@@ -60,6 +61,7 @@ impl Default for StoreConfig {
             write_buffer_size: None,
             compression: None,
             index_interval: Duration::from_millis(900),
+            max_queue_batch_size: 1000,
         }
     }
 }

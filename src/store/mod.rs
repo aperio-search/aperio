@@ -364,6 +364,7 @@ impl Store {
                     .ok()
                     .map(|entry| (key.to_vec(), entry))
             })
+            .take(self.config.max_queue_batch_size)
             .collect();
 
         if items.is_empty() {
