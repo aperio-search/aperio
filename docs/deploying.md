@@ -1,4 +1,4 @@
-# Deploying Aperio
+# Deploying
 
 ## Docker Configuration
 
