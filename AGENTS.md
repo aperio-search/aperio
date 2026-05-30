@@ -61,10 +61,10 @@ Collections are created with an `id_type`:
 
 ## Docs site
 
-In `docs/` — VitePress, managed via **bun** (not npm). Lockfile is `docs/bun.lock`.
+In `docs/` — VitePress, managed via npm. Lockfile is `docs/package-lock.lock`.
 
 ```sh
-cd docs && bun install && bun run docs:dev
+cd docs && npm install && npm run docs:dev
 ```
 
 ## Docker
