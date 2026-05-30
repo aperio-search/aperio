@@ -22,28 +22,22 @@ docker run -e DATA_DIR=/data -p 3000:3000 --name aperio andresribeiro/aperio
 
 Aperio will be reachable on `http://localhost:3000`.
 
-## Node.js client
+## Try it out
 
-```sh
-npm install @aperio-search/aperio
-```
+Once the server is running, create a collection and start searching.
 
-```js
+::: code-group
+
+```js [Node.js]
+// npm install @aperio-search/aperio
+
 import { AperioClient } from "@aperio-search/aperio";
 
 const client = new AperioClient({
   baseUrl: "http://localhost:3000",
   apiKey: "SecretApiKey",
 });
-```
 
-## Try it out
-
-Once the server is running, create a collection and start searching in seconds.
-
-::: code-group
-
-```js [Node.js]
 await client.createCollection({
   name: "movies",
   idType: "string",
