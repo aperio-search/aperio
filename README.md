@@ -1,6 +1,10 @@
 <h1 align="center">Aperio</h1>
 
 <p align="center">
+<img src="images/banner.png" alt="Aperio banner" width="100%">
+</p>
+
+<p align="center">
 <a href="https://github.com/aperio-search/aperio"><img src="https://img.shields.io/badge/aperio-Screamingly%20fast-green" alt="Aperio" height=50></a>
 <img src="https://img.shields.io/github/stars/aperio-search/aperio" alt="stars">
 <img src="https://img.shields.io/badge/language-Rust-orange" alt="Rust">
