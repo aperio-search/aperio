@@ -118,15 +118,15 @@ mod tests {
 }
 
 #[derive(Deserialize)]
-pub struct BackupPath {
-    pub path: String,
+pub struct BackupFile {
+    pub name: String,
 }
 
 #[derive(Serialize)]
 pub struct ExportResponse {
     pub ok: bool,
     pub size: u64,
-    pub path: String,
+    pub file: String,
 }
 
 #[derive(Serialize)]

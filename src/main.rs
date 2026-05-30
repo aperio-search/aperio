@@ -32,6 +32,7 @@ async fn main() {
     }
     let db = db_builder.open().expect("failed to open database");
 
+    let dumps_folder = app_config.dumps_folder.clone().map(PathBuf::from);
     let main_api_key = app_config.main_api_key.clone();
     let search_api_key = app_config.search_api_key.clone();
 
@@ -57,7 +58,7 @@ async fn main() {
     {
         auth.search_api_key = key;
     }
-    let app = routes::create_router(store, auth);
+    let app = routes::create_router(store, auth, dumps_folder);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 

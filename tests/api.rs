@@ -18,7 +18,20 @@ fn test_app() -> (Router, TempDir) {
         .unwrap();
     let store = Arc::new(Store::new(db));
     let auth = aperio::auth::AuthConfig::default();
-    (routes::create_router(store, auth), dir)
+    let dumps = dir.path().join("dumps");
+    std::fs::create_dir_all(&dumps).unwrap();
+    (routes::create_router(store, auth, Some(dumps)), dir)
+}
+
+fn test_app_no_dumps() -> (Router, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let db = fjall::Database::builder(dir.path())
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Arc::new(Store::new(db));
+    let auth = aperio::auth::AuthConfig::default();
+    (routes::create_router(store, auth, None), dir)
 }
 
 fn json_request(method: Method, path: &str, body: Value) -> Request<Body> {
@@ -574,35 +587,47 @@ async fn upsert_with_numeric_id() {
 // Backup endpoint tests
 // ---------------------------------------------------------------------------
 
+fn main_key_post(path: &str, body: Value) -> Request<Body> {
+    json_request(Method::POST, path, body)
+}
+
+fn empty_post(path: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", "SecretApiKey")
+        .body(Body::from("{}"))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn export_endpoint_main_key() {
     let (app, dir) = test_app();
 
-    // Create some data first
-    let req = json_request(
-        Method::POST,
+    let req = main_key_post(
         "/collections",
         json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
     send(&app, req).await;
-    let req = json_request(
-        Method::POST,
+    let req = main_key_post(
         "/collections/docs/items",
         json!({"id": "1", "content": "hello world"}),
     );
     send(&app, req).await;
 
-    let export_path = dir.path().join("export.bin");
-    let req = json_request(
-        Method::POST,
-        "/backup/export",
-        json!({"path": export_path}),
-    );
+    // Export (no body — auto-generated filename)
+    let req = empty_post("/backup/export");
     let (status, body) = send(&app, req).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
     assert!(body["size"].as_u64().unwrap_or(0) > 0);
-    assert!(export_path.exists(), "export file should exist");
+    let file = body["file"].as_str().unwrap().to_string();
+    assert!(file.ends_with(".aperio"), "expected '.aperio' extension, got {file}");
+
+    // Verify the file exists in the dumps folder
+    let dumps_path = dir.path().join("dumps").join(&file);
+    assert!(dumps_path.exists(), "export file should exist at {dumps_path:?}");
 
     // Verify the file can be imported into a fresh store
     let import_dir = TempDir::new().unwrap();
@@ -611,7 +636,7 @@ async fn export_endpoint_main_key() {
         .open()
         .unwrap();
     let store = Store::new(db);
-    let data = std::fs::read(&export_path).unwrap();
+    let data = std::fs::read(&dumps_path).unwrap();
     store.import_snapshot(&data).unwrap();
 
     let list = store.list_collections().unwrap();
@@ -621,45 +646,50 @@ async fn export_endpoint_main_key() {
 
 #[tokio::test]
 async fn export_and_import_roundtrip_via_endpoint() {
-    let (app, dir) = test_app();
+    let dir = TempDir::new().unwrap();
+    let dumps = dir.path().join("dumps");
+    std::fs::create_dir_all(&dumps).unwrap();
 
-    // Seed
-    let req = json_request(
-        Method::POST,
+    // First app (source)
+    let db1 = fjall::Database::builder(dir.path().join("src"))
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store1 = Arc::new(Store::new(db1));
+    let auth1 = aperio::auth::AuthConfig::default();
+    let app1 = routes::create_router(store1, auth1, Some(dumps.clone()));
+
+    let req = main_key_post(
         "/collections",
         json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
     );
-    send(&app, req).await;
-    let req = json_request(
-        Method::POST,
+    send(&app1, req).await;
+    let req = main_key_post(
         "/collections/docs/items",
         json!({"id": "a", "content": "hello world"}),
     );
-    send(&app, req).await;
+    send(&app1, req).await;
 
     // Export
-    let export_path = dir.path().join("snapshot.bin");
-    let req = json_request(
-        Method::POST,
-        "/backup/export",
-        json!({"path": export_path}),
-    );
-    send(&app, req).await;
+    let req = empty_post("/backup/export");
+    let (status, body) = send(&app1, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let file = body["file"].as_str().unwrap().to_string();
 
-    // Create a second app for import
-    let (app2, _dir2) = test_app();
+    // Second app (destination) — uses same dumps folder
+    let db2 = fjall::Database::builder(dir.path().join("dst"))
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store2 = Arc::new(Store::new(db2));
+    let auth2 = aperio::auth::AuthConfig::default();
+    let app2 = routes::create_router(store2, auth2, Some(dumps));
 
-    // Import the snapshot into the second app
-    let req = json_request(
-        Method::POST,
-        "/backup/import",
-        json!({"path": export_path}),
-    );
+    let req = main_key_post("/backup/import", json!({"name": file}));
     let (status, body) = send(&app2, req).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
 
-    // Verify the second app has the data
     let (_status, body) = send(&app2, get_request("/collections")).await;
     assert_eq!(body["collections"].as_array().unwrap().len(), 1);
 }
@@ -667,11 +697,13 @@ async fn export_and_import_roundtrip_via_endpoint() {
 #[tokio::test]
 async fn export_requires_main_key() {
     let (app, _dir) = test_app();
-    let req = search_key_json(
-        Method::POST,
-        "/backup/export",
-        json!({"path": "/tmp/aperio_test_export.bin"}),
-    );
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/backup/export")
+        .header("content-type", "application/json")
+        .header("authorization", "PublicApiKey")
+        .body(Body::from("{}"))
+        .unwrap();
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
@@ -682,7 +714,7 @@ async fn import_requires_main_key() {
     let req = search_key_json(
         Method::POST,
         "/backup/import",
-        json!({"path": "/tmp/aperio_test_import.bin"}),
+        json!({"name": "any.bin"}),
     );
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -690,13 +722,24 @@ async fn import_requires_main_key() {
 
 #[tokio::test]
 async fn import_nonexistent_file_returns_error() {
-    let (app, dir) = test_app();
-    let path = dir.path().join("nope.bin");
-    let req = json_request(
-        Method::POST,
-        "/backup/import",
-        json!({"path": path}),
-    );
+    let (app, _dir) = test_app();
+    let req = main_key_post("/backup/import", json!({"name": "nope.bin"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn export_without_dumps_folder_returns_error() {
+    let (app, _dir) = test_app_no_dumps();
+    let req = main_key_post("/backup/export", json!({}));
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_without_dumps_folder_returns_error() {
+    let (app, _dir) = test_app_no_dumps();
+    let req = main_key_post("/backup/import", json!({"name": "any.bin"}));
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

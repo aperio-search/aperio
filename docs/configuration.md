@@ -30,6 +30,7 @@ log_level = "info"                 # trace, debug, info, warn, error
 index_interval_ms = 900            # ms between index queue flushes
 main_api_key = "my-secret-key"     # main API key (full access)
 search_api_key = "my-search-key"   # search-only API key (search & suggest only)
+dumps_folder = "/data/dumps"       # backup snapshot directory
 ```
 
 ## Configuration Reference
@@ -48,3 +49,4 @@ search_api_key = "my-search-key"   # search-only API key (search & suggest only)
 | `index_interval_ms` | `integer` | `900` | Interval in milliseconds between background index queue flushes. Lower values reduce write-to-search latency; higher values batch more work per flush |
 | `main_api_key` | `string` | `SecretApiKey` | Main API key with full access to all endpoints. Overridden by the `MAIN_API_KEY` environment variable if set |
 | `search_api_key` | `string` | `PublicApiKey` | Search-only API key for `search` and `suggest` endpoints. Overridden by the `SEARCH_API_KEY` environment variable if set |
+| `dumps_folder` | `string` | *(unset)* | Directory where backup snapshots are written to and read from. If not set, `/backup/export` and `/backup/import` return a `400` error. Must be an absolute or relative path writable by the server process |

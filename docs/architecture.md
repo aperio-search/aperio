@@ -44,6 +44,8 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `DELETE` | `/collections/{name}/items/{id}` | Delete document |
 | `GET` | `/collections/{name}/search?q=...` | Search documents |
 | `GET` | `/collections/{name}/suggest?q=...` | Autocomplete |
+| `POST` | `/backup/export` | Export database snapshot to a file in the dumps folder |
+| `POST` | `/backup/import` | Import a snapshot from the dumps folder |
 
 ## Store Engine (`src/store.rs`)
 
@@ -132,7 +134,9 @@ Configurable fjall options exposed via `StoreConfig`:
 
 ## Configuration (`src/config.rs`)
 
-Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is silently lenient and errors fall back to defaults with a warning. The `AppConfig` struct maps one-to-one with `StoreConfig` fields plus server-level options (`block_cache_size`, `maintenance_threads`, `log_level`).
+Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is silently lenient and errors fall back to defaults with a warning. The `AppConfig` struct maps one-to-one with `StoreConfig` fields plus server-level options (`block_cache_size`, `maintenance_threads`, `log_level`, `dumps_folder`).
+
+The `dumps_folder` config option sets the directory for backup snapshots. It defaults to `None` (unset) — if missing, `POST /backup/export` and `POST /backup/import` return `400 Bad Request`. This prevents accidental file writes when the operator hasn't explicitly configured a dump location.
 
 ## Error Handling (`src/error.rs`)
 
