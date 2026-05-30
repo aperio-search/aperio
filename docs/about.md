@@ -26,8 +26,14 @@ const members = [
 
 # About
 
+## Project
+
+Aperio is built for those who prioritizes simplicity and performance over features like ranking, filtering, and ordering, trading them for extreme efficiency and high throughput.
+
+## Sponsor
+
 Love using Aperio? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
 
-Thank you for using Aperio!
+##
 
 <VPTeamMembers size="small" :members />
