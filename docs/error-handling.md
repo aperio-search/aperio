@@ -15,6 +15,7 @@ All API errors return a JSON body with an `error` field describing the problem.
 | Code | Meaning | When it occurs |
 |---|---|---|
 | `400 Bad Request` | Malformed request body or invalid parameters | JSON parse failure, missing required fields, invalid query parameter values |
+| `401 Unauthorized` | Missing or invalid API key | Request without `Authorization` header or with an incorrect API key |
 | `404 Not Found` | The requested resource does not exist | Unknown collection name, unknown item ID, unmatched route |
 | `500 Internal Server Error` | Unexpected server-side failure | Storage errors, internal bugs, resource exhaustion |
 

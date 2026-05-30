@@ -1,5 +1,7 @@
 # Inserting Items
 
+> **Auth required**: `Authorization: <main_api_key>` header.
+
 Inserts or updates an item in the specified collection. The request body must be a JSON object with an `id` field matching the collection's `id_type`. Only fields listed in the collection's `searchable_fields` are indexed; all other fields are stored but ignored by the search index.
 
 ## Example

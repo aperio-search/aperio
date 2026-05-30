@@ -1,5 +1,7 @@
 # Creating Collections
 
+> **Auth required**: `Authorization: <main_api_key>` header.
+
 A `Collection` must be created before you can insert any data. During creation, you must specify whether your record `IDs` will be `number` or `string`, and which JSON fields should be searchable. Because `ID` selection directly impacts database indexing, please consider the following performance guidelines:
 
 - **Use sequential IDs**: Whether you choose `number` or `string`, keeping them sequential is critical. Completely random `IDs` (such as `UUIDv4`) will drastically degrade write performance.

@@ -17,7 +17,8 @@ fn test_app() -> (Router, TempDir) {
         .open()
         .unwrap();
     let store = Arc::new(Store::new(db));
-    (routes::create_router(store), dir)
+    let auth = aperio::auth::AuthConfig::default();
+    (routes::create_router(store, auth), dir)
 }
 
 fn json_request(method: Method, path: &str, body: Value) -> Request<Body> {
@@ -25,6 +26,7 @@ fn json_request(method: Method, path: &str, body: Value) -> Request<Body> {
         .method(method)
         .uri(path)
         .header("content-type", "application/json")
+        .header("authorization", "SecretApiKey")
         .body(Body::from(serde_json::to_string(&body).unwrap()))
         .unwrap()
 }
@@ -33,6 +35,7 @@ fn get_request(path: &str) -> Request<Body> {
     Request::builder()
         .method(Method::GET)
         .uri(path)
+        .header("authorization", "SecretApiKey")
         .body(Body::empty())
         .unwrap()
 }
@@ -41,6 +44,7 @@ fn delete_request(path: &str) -> Request<Body> {
     Request::builder()
         .method(Method::DELETE)
         .uri(path)
+        .header("authorization", "SecretApiKey")
         .body(Body::empty())
         .unwrap()
 }
@@ -56,6 +60,128 @@ async fn read_body(resp: axum::response::Response) -> (StatusCode, Value) {
 
 async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
     read_body(app.clone().oneshot(req).await.unwrap()).await
+}
+
+fn noauth_get(path: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(path)
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn search_key_get(path: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(path)
+        .header("authorization", "PublicApiKey")
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn search_key_json(method: Method, path: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", "PublicApiKey")
+        .body(Body::from(serde_json::to_string(&body).unwrap()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn status_is_public() {
+    let (app, _dir) = test_app();
+    let (status, body) = send(&app, noauth_get("/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"ok": true}));
+}
+
+#[tokio::test]
+async fn missing_auth_returns_401() {
+    let (app, _dir) = test_app();
+    let (status, body) = send(&app, noauth_get("/collections")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "unauthorized");
+}
+
+#[tokio::test]
+async fn invalid_auth_returns_401() {
+    let (app, _dir) = test_app();
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/collections")
+        .header("authorization", "WrongKey")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "unauthorized");
+}
+
+#[tokio::test]
+async fn search_key_can_search() {
+    let (app, _dir) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": "1", "content": "hello world"}),
+    );
+    send(&app, req).await;
+
+    let (_status, body) = send(&app, search_key_get("/collections/docs/search?q=hello")).await;
+    assert_eq!(body["results"], json!([{"id": "1", "content": "hello world"}]));
+}
+
+#[tokio::test]
+async fn search_key_can_suggest() {
+    let (app, _dir) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": "1", "content": "hello world"}),
+    );
+    send(&app, req).await;
+
+    let (_status, body) = send(&app, search_key_get("/collections/docs/suggest?q=hel")).await;
+    assert!(
+        body["suggestions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("hello"))
+    );
+}
+
+#[tokio::test]
+async fn search_key_cannot_admin() {
+    let (app, _dir) = test_app();
+
+    let req = search_key_json(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _body) = send(&app, search_key_get("/collections")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

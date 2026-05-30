@@ -28,6 +28,8 @@ compression = "lz4"
 block_size = 65536                 # 64 KiB
 log_level = "info"                 # trace, debug, info, warn, error
 index_interval_ms = 900            # ms between index queue flushes
+main_api_key = "my-secret-key"     # main API key (full access)
+search_api_key = "my-search-key"   # search-only API key (search & suggest only)
 ```
 
 ## Configuration Reference
@@ -44,3 +46,5 @@ index_interval_ms = 900            # ms between index queue flushes
 | `block_size` | `integer` (bytes) | `4096` (4 KiB, fjall default) | Data block size. Larger values (e.g. 64 KiB) improve range-scan throughput; smaller values reduce read amplification for point lookups |
 | `log_level` | `string` | `"info"` | Log level: `"trace"`, `"debug"`, `"info"`, `"warn"`, or `"error"`. Overridden by the `RUST_LOG` environment variable if set |
 | `index_interval_ms` | `integer` | `900` | Interval in milliseconds between background index queue flushes. Lower values reduce write-to-search latency; higher values batch more work per flush |
+| `main_api_key` | `string` | `SecretApiKey` | Main API key with full access to all endpoints. Overridden by the `MAIN_API_KEY` environment variable if set |
+| `search_api_key` | `string` | `PublicApiKey` | Search-only API key for `search` and `suggest` endpoints. Overridden by the `SEARCH_API_KEY` environment variable if set |
