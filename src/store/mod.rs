@@ -535,6 +535,32 @@ impl Store {
         Ok(ListCollectionsResponse { collections })
     }
 
+    pub fn export_snapshot(&self) -> Result<Vec<u8>, AppError> {
+        self.process_pending_queue()?;
+        crate::backup::export_snapshot(&self.db)
+    }
+
+    pub fn import_snapshot(&self, data: &[u8]) -> Result<(), AppError> {
+        crate::backup::import_snapshot(&self.db, data)?;
+        self.refresh_collections_cache()?;
+        Ok(())
+    }
+
+    fn refresh_collections_cache(&self) -> Result<(), AppError> {
+        let meta = self.meta_keyspace()?;
+        let mut map = std::collections::HashMap::new();
+        for guard in meta.iter() {
+            if let Ok((key, value)) = guard.into_inner() {
+                let name = String::from_utf8_lossy(&key).to_string();
+                if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &value) {
+                    map.insert(name, col_meta);
+                }
+            }
+        }
+        *self.collections.write().unwrap() = map;
+        Ok(())
+    }
+
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
         self.validate_collection_exists(collection)?;
 

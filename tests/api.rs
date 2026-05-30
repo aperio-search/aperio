@@ -569,3 +569,134 @@ async fn upsert_with_numeric_id() {
         json!([{"id": 42, "content": "hello world"}])
     );
 }
+
+// ---------------------------------------------------------------------------
+// Backup endpoint tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn export_endpoint_main_key() {
+    let (app, dir) = test_app();
+
+    // Create some data first
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": "1", "content": "hello world"}),
+    );
+    send(&app, req).await;
+
+    let export_path = dir.path().join("export.bin");
+    let req = json_request(
+        Method::POST,
+        "/backup/export",
+        json!({"path": export_path}),
+    );
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert!(body["size"].as_u64().unwrap_or(0) > 0);
+    assert!(export_path.exists(), "export file should exist");
+
+    // Verify the file can be imported into a fresh store
+    let import_dir = TempDir::new().unwrap();
+    let db = fjall::Database::builder(import_dir.path())
+        .cache_size(1_000_000)
+        .open()
+        .unwrap();
+    let store = Store::new(db);
+    let data = std::fs::read(&export_path).unwrap();
+    store.import_snapshot(&data).unwrap();
+
+    let list = store.list_collections().unwrap();
+    assert_eq!(list.collections.len(), 1);
+    assert_eq!(list.collections[0].name, "docs");
+}
+
+#[tokio::test]
+async fn export_and_import_roundtrip_via_endpoint() {
+    let (app, dir) = test_app();
+
+    // Seed
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": "a", "content": "hello world"}),
+    );
+    send(&app, req).await;
+
+    // Export
+    let export_path = dir.path().join("snapshot.bin");
+    let req = json_request(
+        Method::POST,
+        "/backup/export",
+        json!({"path": export_path}),
+    );
+    send(&app, req).await;
+
+    // Create a second app for import
+    let (app2, _dir2) = test_app();
+
+    // Import the snapshot into the second app
+    let req = json_request(
+        Method::POST,
+        "/backup/import",
+        json!({"path": export_path}),
+    );
+    let (status, body) = send(&app2, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+
+    // Verify the second app has the data
+    let (_status, body) = send(&app2, get_request("/collections")).await;
+    assert_eq!(body["collections"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn export_requires_main_key() {
+    let (app, _dir) = test_app();
+    let req = search_key_json(
+        Method::POST,
+        "/backup/export",
+        json!({"path": "/tmp/aperio_test_export.bin"}),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn import_requires_main_key() {
+    let (app, _dir) = test_app();
+    let req = search_key_json(
+        Method::POST,
+        "/backup/import",
+        json!({"path": "/tmp/aperio_test_import.bin"}),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn import_nonexistent_file_returns_error() {
+    let (app, dir) = test_app();
+    let path = dir.path().join("nope.bin");
+    let req = json_request(
+        Method::POST,
+        "/backup/import",
+        json!({"path": path}),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
