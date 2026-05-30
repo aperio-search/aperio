@@ -482,7 +482,6 @@ async fn collection_info_endpoint() {
     assert_eq!(body["name"], "docs");
     assert_eq!(body["id_type"], "string");
     assert_eq!(body["document_count"], 1);
-    assert_eq!(body["unique_terms"], 2);
     assert_eq!(body["searchable_fields"], json!(["content"]));
 }
 

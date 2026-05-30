@@ -2,7 +2,7 @@
 
 > **Auth required**: `Authorization: <main_api_key>` header.
 
-Returns metadata about the collection, including the number of indexed documents and unique terms in the inverted index.
+Returns metadata about the collection, including the number of indexed documents.
 
 ## Example
 
@@ -10,7 +10,7 @@ Returns metadata about the collection, including the number of indexed documents
 
 ```js [Node.js]
 const meta = await client.getCollection("posts");
-// { name: "posts", id_type: "number", document_count: 42, unique_terms: 318 }
+// { name: "posts", id_type: "number", document_count: 42 }
 ```
 
 ```js [Fetch]
@@ -28,7 +28,6 @@ const meta = await res.json();
 #   "name": "posts",
 #   "id_type": "number",
 #   "document_count": 42,
-#   "unique_terms": 318
 # }
 
 curl http://localhost:3000/collections/posts \
@@ -57,6 +56,5 @@ curl http://localhost:3000/collections/posts \
 | `name` | `string` | Collection name |
 | `id_type` | `string` | `"number"` or `"string"` |
 | `document_count` | `integer` | Number of indexed documents |
-| `unique_terms` | `integer` | Number of unique terms |
 
 **Response:** `200 OK`

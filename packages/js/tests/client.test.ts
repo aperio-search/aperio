@@ -105,7 +105,6 @@ describe("AperioClient", () => {
 				name: "posts",
 				id_type: "number",
 				document_count: 42,
-				unique_terms: 318,
 				searchable_fields: ["title"],
 			};
 

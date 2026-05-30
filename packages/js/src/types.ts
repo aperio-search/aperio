@@ -29,7 +29,6 @@ export interface CollectionInfo {
 	name: string;
 	idType: string;
 	documentCount: number;
-	uniqueTerms: number;
 	searchableFields: string[];
 }
 

@@ -44,7 +44,6 @@ fn full_string_workflow() {
         .unwrap();
     let info = store.collection_info("docs").unwrap();
     assert_eq!(info.document_count, 0);
-    assert_eq!(info.unique_terms, 0);
 
     store
         .upsert(
