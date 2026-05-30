@@ -1,0 +1,34 @@
+{
+  "name": "@aperio-search/aperio",
+  "version": "0.1.0",
+  "description": "Node.js client for Aperio search engine",
+  "license": "MIT",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/andresribeiro"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "lint": "biome check src/ tests/",
+    "lint:fix": "biome check --write src/ tests/",
+    "format": "biome format --write src/ tests/"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  }
+}

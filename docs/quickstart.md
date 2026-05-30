@@ -22,11 +22,44 @@ docker run -e DATA_DIR=/data -p 3000:3000 --name aperio andresribeiro/aperio
 
 Aperio will be reachable on `http://localhost:3000`.
 
+## Node.js client
+
+```sh
+npm install @aperio-search/aperio
+```
+
+```js
+import { AperioClient } from "@aperio-search/aperio";
+
+const client = new AperioClient({
+  baseUrl: "http://localhost:3000",
+  apiKey: "SecretApiKey",
+});
+```
+
 ## Try it out
 
 Once the server is running, create a collection and start searching in seconds.
 
-```sh
+::: code-group
+
+```js [Node.js]
+await client.createCollection({
+  name: "movies",
+  idType: "string",
+  searchableFields: ["title"],
+});
+
+await client.upsertItem("movies", { id: "1", title: "the empire strikes back" });
+await client.upsertItem("movies", { id: "2", title: "star wars a new hope" });
+await client.upsertItem("movies", { id: "3", title: "return of the jedi" });
+
+const results = await client.search("movies", { q: "star" });
+
+const suggestions = await client.suggest("movies", { q: "emp" });
+```
+
+```sh [cURL]
 # Create a collection that uses string IDs, with "title" as the searchable field
 curl -X POST http://localhost:3000/collections \
   -H "Content-Type: application/json" \

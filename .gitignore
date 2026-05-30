@@ -3,3 +3,5 @@
 /docs/node_modules
 /docs/bun.lock
 /docs/.vitepress/cache
+/packages/js/node_modules
+/packages/js/dist
