@@ -59,10 +59,7 @@ fn full_string_workflow() {
         )
         .unwrap();
     store
-        .upsert(
-            "docs",
-            json!({"id": "id3", "content": "brown fox quick"}),
-        )
+        .upsert("docs", json!({"id": "id3", "content": "brown fox quick"}))
         .unwrap();
 
     let all = store.search("docs", "fox", false, 10, None).unwrap();
@@ -333,10 +330,7 @@ fn persist_and_reopen() {
         .create_collection("docs", "string", &["content".into()])
         .unwrap();
     store
-        .upsert(
-            "docs",
-            json!({"id": "persist", "content": "hello world"}),
-        )
+        .upsert("docs", json!({"id": "persist", "content": "hello world"}))
         .unwrap();
     drop(store);
 
@@ -411,7 +405,10 @@ fn export_empty_database() {
     let store = Store::new(db);
     let data = store.export_snapshot().unwrap();
     // Should produce valid export data (empty keyspace list)
-    assert!(!data.is_empty(), "export data should have header even with no collections");
+    assert!(
+        !data.is_empty(),
+        "export data should have header even with no collections"
+    );
 }
 
 #[test]
@@ -427,8 +424,12 @@ fn export_import_number_collection() {
     store
         .create_collection("nums", "number", &["val".into()])
         .unwrap();
-    store.upsert("nums", json!({"id": 42, "val": "hello"})).unwrap();
-    store.upsert("nums", json!({"id": 99, "val": "world"})).unwrap();
+    store
+        .upsert("nums", json!({"id": 42, "val": "hello"}))
+        .unwrap();
+    store
+        .upsert("nums", json!({"id": 99, "val": "world"}))
+        .unwrap();
 
     let data = store.export_snapshot().unwrap();
     drop(store);

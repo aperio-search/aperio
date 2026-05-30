@@ -151,7 +151,10 @@ async fn search_key_can_search() {
     send(&app, req).await;
 
     let (_status, body) = send(&app, search_key_get("/collections/docs/search?q=hello")).await;
-    assert_eq!(body["results"], json!([{"id": "1", "content": "hello world"}]));
+    assert_eq!(
+        body["results"],
+        json!([{"id": "1", "content": "hello world"}])
+    );
 }
 
 #[tokio::test]
@@ -280,7 +283,10 @@ async fn upsert_and_search() {
     send(&app, req).await;
 
     let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
-    assert_eq!(body["results"], json!([{"id": "1", "content": "hello world"}]));
+    assert_eq!(
+        body["results"],
+        json!([{"id": "1", "content": "hello world"}])
+    );
     assert_eq!(body["take"], 20);
 }
 
@@ -623,11 +629,17 @@ async fn export_endpoint_main_key() {
     assert_eq!(body["ok"], true);
     assert!(body["size"].as_u64().unwrap_or(0) > 0);
     let file = body["file"].as_str().unwrap().to_string();
-    assert!(file.ends_with(".aperio"), "expected '.aperio' extension, got {file}");
+    assert!(
+        file.ends_with(".aperio"),
+        "expected '.aperio' extension, got {file}"
+    );
 
     // Verify the file exists in the dumps folder
     let dumps_path = dir.path().join("dumps").join(&file);
-    assert!(dumps_path.exists(), "export file should exist at {dumps_path:?}");
+    assert!(
+        dumps_path.exists(),
+        "export file should exist at {dumps_path:?}"
+    );
 
     // Verify the file can be imported into a fresh store
     let import_dir = TempDir::new().unwrap();
@@ -711,11 +723,7 @@ async fn export_requires_main_key() {
 #[tokio::test]
 async fn import_requires_main_key() {
     let (app, _dir) = test_app();
-    let req = search_key_json(
-        Method::POST,
-        "/backup/import",
-        json!({"name": "any.bin"}),
-    );
+    let req = search_key_json(Method::POST, "/backup/import", json!({"name": "any.bin"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

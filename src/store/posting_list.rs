@@ -92,6 +92,7 @@ pub fn find_shard_for_id(
 }
 
 pub fn add_to_posting_list(
+    batch: &mut fjall::OwnedWriteBatch,
     inverted: &fjall::Keyspace,
     word: &str,
     id: &str,
@@ -99,7 +100,7 @@ pub fn add_to_posting_list(
 ) -> Result<(), AppError> {
     let marker_key = word.as_bytes();
     if inverted.get(marker_key)?.is_none() {
-        inverted.insert(marker_key, [])?;
+        batch.insert(inverted, marker_key, []);
     }
 
     let indices = list_shard_indices(inverted, word)?;
@@ -111,7 +112,7 @@ pub fn add_to_posting_list(
             ids: vec![id.to_string()],
         };
         let value = encode_rkyv!(&shard)?;
-        inverted.insert(shard_key(word, 0), &value)?;
+        batch.insert(inverted, shard_key(word, 0), &value);
         return Ok(());
     }
 
@@ -132,7 +133,7 @@ pub fn add_to_posting_list(
             new_shard.ids.push(id.to_string());
             new_shard.last = id.to_string();
             let new_value = encode_rkyv!(&new_shard)?;
-            inverted.insert(shard_key(word, last_idx), &new_value)?;
+            batch.insert(inverted, shard_key(word, last_idx), &new_value);
         } else {
             let shard = PostingShard {
                 first: id.to_string(),
@@ -140,7 +141,7 @@ pub fn add_to_posting_list(
                 ids: vec![id.to_string()],
             };
             let value = encode_rkyv!(&shard)?;
-            inverted.insert(shard_key(word, last_idx + 1), &value)?;
+            batch.insert(inverted, shard_key(word, last_idx + 1), &value);
         }
         return Ok(());
     }
@@ -167,12 +168,13 @@ pub fn add_to_posting_list(
     }
 
     let new_value = encode_rkyv!(&new_shard)?;
-    inverted.insert(shard_key(word, target), &new_value)?;
+    batch.insert(inverted, shard_key(word, target), &new_value);
 
     Ok(())
 }
 
 pub fn remove_from_posting_list(
+    batch: &mut fjall::OwnedWriteBatch,
     inverted: &fjall::Keyspace,
     word: &str,
     id: &str,
@@ -200,7 +202,7 @@ pub fn remove_from_posting_list(
 
     let key = shard_key(word, target);
     if new_shard.ids.is_empty() {
-        inverted.remove(&key)?;
+        batch.remove(inverted, &key);
     } else {
         if ran_first {
             new_shard.first = new_shard.ids[0].clone();
@@ -209,13 +211,14 @@ pub fn remove_from_posting_list(
             new_shard.last = new_shard.ids.last().unwrap().clone();
         }
         let new_value = encode_rkyv!(&new_shard)?;
-        inverted.insert(&key, &new_value)?;
+        batch.insert(inverted, &key, &new_value);
     }
 
     Ok(())
 }
 
 pub fn add_to_roaring_posting_list(
+    batch: &mut fjall::OwnedWriteBatch,
     inverted: &fjall::Keyspace,
     word: &str,
     id: u64,
@@ -223,7 +226,7 @@ pub fn add_to_roaring_posting_list(
 ) -> Result<(), AppError> {
     let marker_key = word.as_bytes();
     if inverted.get(marker_key)?.is_none() {
-        inverted.insert(marker_key, [])?;
+        batch.insert(inverted, marker_key, []);
     }
 
     let indices = list_shard_indices(inverted, word)?;
@@ -232,7 +235,7 @@ pub fn add_to_roaring_posting_list(
         let mut bitmap = RoaringTreemap::new();
         bitmap.insert(id);
         let value = roaring_to_vec(&bitmap)?;
-        inverted.insert(shard_key(word, 0), &value)?;
+        batch.insert(inverted, shard_key(word, 0), &value);
         return Ok(());
     }
 
@@ -246,18 +249,19 @@ pub fn add_to_roaring_posting_list(
     if bitmap.len() < max_roaring_shard_size {
         bitmap.insert(id);
         let value = roaring_to_vec(&bitmap)?;
-        inverted.insert(&last_key, &value)?;
+        batch.insert(inverted, &last_key, &value);
     } else {
         let mut new_bitmap = RoaringTreemap::new();
         new_bitmap.insert(id);
         let value = roaring_to_vec(&new_bitmap)?;
-        inverted.insert(shard_key(word, last_idx + 1), &value)?;
+        batch.insert(inverted, shard_key(word, last_idx + 1), &value);
     }
 
     Ok(())
 }
 
 pub fn remove_from_roaring_posting_list(
+    batch: &mut fjall::OwnedWriteBatch,
     inverted: &fjall::Keyspace,
     word: &str,
     id: u64,
@@ -278,10 +282,10 @@ pub fn remove_from_roaring_posting_list(
         }
         bitmap.remove(id);
         if bitmap.is_empty() {
-            inverted.remove(&key)?;
+            batch.remove(inverted, &key);
         } else {
             let value = roaring_to_vec(&bitmap)?;
-            inverted.insert(&key, &value)?;
+            batch.insert(inverted, &key, &value);
         }
         return Ok(());
     }
