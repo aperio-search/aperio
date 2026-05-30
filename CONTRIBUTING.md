@@ -39,7 +39,7 @@ Config file parsing is **silently lenient** — on any error it falls back to de
 Documentation lives in `docs/` (VitePress, managed via **bun**):
 
 ```sh
-cd docs && bun install && bun run docs:dev
+cd docs && npm install && npm run docs:dev
 ```
 
 ## Code Conventions

@@ -1,7 +1,6 @@
 /target
 /data
 /docs/node_modules
-/docs/bun.lock
 /docs/.vitepress/cache
 /docs/.vitepress/dist
 /packages/js/node_modules
