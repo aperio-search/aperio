@@ -63,8 +63,7 @@ mod tests {
 
     #[test]
     fn from_fjall_error() {
-        let fjall_err: fjall::Error =
-            std::io::Error::other("db error").into();
+        let fjall_err: fjall::Error = std::io::Error::other("db error").into();
         let err: AppError = fjall_err.into();
         assert!(matches!(err, AppError::Internal(_)));
     }
@@ -79,11 +78,10 @@ mod tests {
     fn body_to_json(resp: Response) -> serde_json::Value {
         let body = resp.into_body();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let bytes = rt
-            .block_on(async {
-                let collected = BodyExt::collect(body).await.unwrap();
-                collected.to_bytes()
-            });
+        let bytes = rt.block_on(async {
+            let collected = BodyExt::collect(body).await.unwrap();
+            collected.to_bytes()
+        });
         serde_json::from_slice(&bytes).unwrap()
     }
 }

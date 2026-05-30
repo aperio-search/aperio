@@ -20,7 +20,10 @@ pub struct AppState {
 fn router_with_state(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/status", get(status))
-        .route("/collections", get(list_collections).post(create_collection))
+        .route(
+            "/collections",
+            get(list_collections).post(create_collection),
+        )
         .route("/collections/{collection}/items", post(upsert_item))
         .route("/collections/{collection}/search", get(search))
         .route("/collections/{collection}/suggest", get(suggest))

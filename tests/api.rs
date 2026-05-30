@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use aperio::routes;
 use aperio::store::Store;
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use axum::Router;
 use http_body_util::BodyExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -162,8 +162,11 @@ async fn search_with_pagination() {
         send(&app, req).await;
     }
 
-    let (_status, page1) =
-        send(&app, get_request("/collections/docs/search?q=hello&take=2&sort=asc")).await;
+    let (_status, page1) = send(
+        &app,
+        get_request("/collections/docs/search?q=hello&take=2&sort=asc"),
+    )
+    .await;
     assert_eq!(page1["results"], json!(["a", "b"]));
 
     let after = page1["results"][1].as_str().unwrap();
@@ -198,8 +201,11 @@ async fn search_sort_asc() {
         send(&app, req).await;
     }
 
-    let (_status, body) =
-        send(&app, get_request("/collections/docs/search?q=hello&sort=asc")).await;
+    let (_status, body) = send(
+        &app,
+        get_request("/collections/docs/search?q=hello&sort=asc"),
+    )
+    .await;
     assert_eq!(body["results"], json!(["a", "b"]));
 }
 
@@ -223,8 +229,11 @@ async fn search_sort_desc() {
         send(&app, req).await;
     }
 
-    let (_status, body) =
-        send(&app, get_request("/collections/docs/search?q=hello&sort=desc")).await;
+    let (_status, body) = send(
+        &app,
+        get_request("/collections/docs/search?q=hello&sort=desc"),
+    )
+    .await;
     assert_eq!(body["results"], json!(["b", "a"]));
 }
 
@@ -247,10 +256,12 @@ async fn suggest_endpoint() {
     send(&app, req).await;
 
     let (_status, body) = send(&app, get_request("/collections/docs/suggest?q=hel")).await;
-    assert!(body["suggestions"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("hello")));
+    assert!(
+        body["suggestions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("hello"))
+    );
 }
 
 #[tokio::test]
@@ -382,10 +393,7 @@ async fn list_collections_after_create() {
     let (_status, body) = send(&app, get_request("/collections")).await;
     let cols = body["collections"].as_array().unwrap();
     assert_eq!(cols.len(), 2);
-    let names: Vec<&str> = cols
-        .iter()
-        .map(|c| c["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> = cols.iter().map(|c| c["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"a"));
     assert!(names.contains(&"b"));
 }
