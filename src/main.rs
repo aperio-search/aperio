@@ -12,10 +12,22 @@ async fn main() {
     let app_config = AppConfig::load(config.as_deref());
 
     let log_filter = match std::env::var("RUST_LOG") {
-        Ok(val) => EnvFilter::new(val),
-        Err(_) => EnvFilter::new(app_config.log_level.as_deref().unwrap_or("info")),
+        Ok(val) if !val.is_empty() => EnvFilter::new(val),
+        _ => EnvFilter::new(
+            app_config
+                .log_level
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("info"),
+        ),
     };
-    tracing_subscriber::fmt().with_env_filter(log_filter).init();
+
+    eprintln!("aperio: initializing with log filter: {log_filter}");
+
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stdout)
+        .with_env_filter(log_filter)
+        .init();
 
     tracing::info!(
         data_dir = %data_dir,

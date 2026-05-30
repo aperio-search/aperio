@@ -31,14 +31,14 @@ impl AppConfig {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "failed to read config file");
+                eprintln!("warning: failed to read config file '{}': {e}", path.display());
                 return Self::default();
             }
         };
         match toml::from_str(&content) {
             Ok(cfg) => cfg,
             Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "failed to parse config file");
+                eprintln!("warning: failed to parse config file '{}': {e}", path.display());
                 Self::default()
             }
         }
