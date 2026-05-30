@@ -220,10 +220,8 @@ Client → GET /collections/{name}/search?q=...
 > [!WARNING]
 Treat the Architecture section as a **narrative companion** for developers who enjoy reading about low level engineering, not as operational documentation you would rely on for debugging or performance tuning. **If something here contradicts the code, the code wins.**
 
-## About
-
-Aperio is built for those who prioritizes simplicity and performance over features like ranking, filtering, and ordering, trading them for extreme efficiency and high throughput.
-
 ## Sponsor
 
-Love using Aperio? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
+If you find Aperio useful, please consider becoming a sponsor: as an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
+
+If you have a few seconds, a star on GitHub helps us a lot!
