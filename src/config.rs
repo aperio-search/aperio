@@ -17,6 +17,7 @@ pub struct AppConfig {
     pub compression: Option<String>,
     pub log_level: Option<String>,
     pub index_interval_ms: Option<u64>,
+    pub max_queue_batch_size: Option<usize>,
     pub main_api_key: Option<String>,
     pub search_api_key: Option<String>,
     pub dumps_folder: Option<String>,
@@ -58,6 +59,7 @@ impl AppConfig {
             write_buffer_size: self.write_buffer_size,
             compression: self.compression.and_then(|s| parse_compression(&s)),
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
+            max_queue_batch_size: self.max_queue_batch_size.unwrap_or(1000),
         }
     }
 }
@@ -101,6 +103,7 @@ mod tests {
 min_token_length = 3
 max_shard_size = 500
 max_roaring_shard_size = 50000
+max_queue_batch_size = 2000
 block_cache_size = 67108864
 write_buffer_size = 16777216
 maintenance_threads = 2
@@ -115,6 +118,7 @@ dumps_folder = "/data/dumps"
         assert_eq!(cfg.min_token_length, Some(3));
         assert_eq!(cfg.max_shard_size, Some(500));
         assert_eq!(cfg.max_roaring_shard_size, Some(50000));
+        assert_eq!(cfg.max_queue_batch_size, Some(2000));
         assert_eq!(cfg.block_cache_size, Some(67108864));
         assert_eq!(cfg.write_buffer_size, Some(16777216));
         assert_eq!(cfg.maintenance_threads, Some(2));
@@ -176,6 +180,7 @@ search_api_key = "custom-search-key"
         assert!(store_cfg.write_buffer_size.is_none());
         assert!(store_cfg.compression.is_none());
         assert_eq!(store_cfg.index_interval, Duration::from_millis(900));
+        assert_eq!(store_cfg.max_queue_batch_size, 1000);
     }
 
     #[test]
@@ -187,6 +192,7 @@ search_api_key = "custom-search-key"
             write_buffer_size: Some(8_000_000),
             compression: Some("lz4".into()),
             index_interval_ms: Some(300),
+            max_queue_batch_size: Some(500),
             block_cache_size: None,
             maintenance_threads: None,
             log_level: None,
@@ -201,6 +207,7 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.write_buffer_size, Some(8_000_000));
         assert_eq!(store_cfg.compression, Some(fjall::CompressionType::Lz4));
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
+        assert_eq!(store_cfg.max_queue_batch_size, 500);
     }
 
     #[test]
