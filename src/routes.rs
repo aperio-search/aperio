@@ -38,13 +38,19 @@ fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
         .route("/backup/export", post(export_handler))
         .route("/backup/import", post(import_handler))
         .layer(TraceLayer::new_for_http())
-        .layer(middleware::from_fn_with_state(auth, crate::auth::check_auth))
+        .layer(middleware::from_fn_with_state(
+            auth,
+            crate::auth::check_auth,
+        ))
         .with_state(state)
         .fallback(not_found)
 }
 
 pub fn create_router(store: Arc<Store>, auth: AuthConfig, dumps_folder: Option<PathBuf>) -> Router {
-    let state = Arc::new(AppState { store, dumps_folder });
+    let state = Arc::new(AppState {
+        store,
+        dumps_folder,
+    });
     router_with_state(state, auth)
 }
 
@@ -100,7 +106,11 @@ async fn search(
         results = results.len(),
         "search completed"
     );
-    Ok(Json(SearchResponse { results, take, elapsed_ms }))
+    Ok(Json(SearchResponse {
+        results,
+        take,
+        elapsed_ms,
+    }))
 }
 
 async fn suggest(
@@ -168,10 +178,9 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 }
 
 fn require_dumps_folder(state: &AppState) -> Result<&PathBuf, AppError> {
-    state
-        .dumps_folder
-        .as_ref()
-        .ok_or_else(|| AppError::BadRequest("dumps_folder not configured — set it in aperio.toml".into()))
+    state.dumps_folder.as_ref().ok_or_else(|| {
+        AppError::BadRequest("dumps_folder not configured — set it in aperio.toml".into())
+    })
 }
 
 async fn export_handler(
@@ -187,7 +196,11 @@ async fn export_handler(
         .map_err(|e| AppError::Internal(format!("failed to write export file: {e}")))?;
     let size = data.len() as u64;
     tracing::info!(file = %file, size, "export completed");
-    Ok(Json(ExportResponse { ok: true, size, file }))
+    Ok(Json(ExportResponse {
+        ok: true,
+        size,
+        file,
+    }))
 }
 
 async fn import_handler(

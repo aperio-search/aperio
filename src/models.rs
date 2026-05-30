@@ -27,12 +27,18 @@ mod tests {
     #[test]
     fn search_response_serialize() {
         let resp = SearchResponse {
-            results: vec![serde_json::json!({"id": "a"}), serde_json::json!({"id": "b"})],
+            results: vec![
+                serde_json::json!({"id": "a"}),
+                serde_json::json!({"id": "b"}),
+            ],
             take: 2,
             elapsed_ms: 0.0,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"results":[{"id":"a"},{"id":"b"}],"take":2,"elapsed_ms":0.0}"#);
+        assert_eq!(
+            json,
+            r#"{"results":[{"id":"a"},{"id":"b"}],"take":2,"elapsed_ms":0.0}"#
+        );
     }
 
     #[test]

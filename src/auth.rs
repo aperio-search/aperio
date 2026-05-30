@@ -1,8 +1,8 @@
+use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 
 #[derive(Clone)]
 pub struct AuthConfig {
@@ -19,11 +19,7 @@ impl Default for AuthConfig {
     }
 }
 
-pub async fn check_auth(
-    State(auth): State<AuthConfig>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn check_auth(State(auth): State<AuthConfig>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
 
     if path == "/status" {

@@ -81,7 +81,9 @@ pub fn import_snapshot(db: &fjall::Database, data: &[u8]) -> Result<(), AppError
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(AppError::BadRequest("invalid export format: bad magic".into()));
+        return Err(AppError::BadRequest(
+            "invalid export format: bad magic".into(),
+        ));
     }
 
     let mut version_buf = [0u8; 4];
