@@ -155,8 +155,7 @@ pub struct CreateCollectionRequest {
     pub id_type: String,
 }
 
-#[derive(Serialize)]
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 pub struct CollectionCreated {
     pub name: String,
     pub id_type: String,

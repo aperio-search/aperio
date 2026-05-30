@@ -33,7 +33,9 @@ fn full_string_workflow() {
     assert_eq!(info.unique_terms, 0);
 
     store.upsert("docs", "id1", "the quick brown fox").unwrap();
-    store.upsert("docs", "id2", "jumps over the lazy dog").unwrap();
+    store
+        .upsert("docs", "id2", "jumps over the lazy dog")
+        .unwrap();
     store.upsert("docs", "id3", "brown fox quick").unwrap();
 
     let all = store.search("docs", "fox", false, 10, None).unwrap();
@@ -71,7 +73,9 @@ fn full_number_workflow() {
     let r1 = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(r1, vec!["10", "20"]);
 
-    let r2 = store.search("docs", "hello world", false, 10, None).unwrap();
+    let r2 = store
+        .search("docs", "hello world", false, 10, None)
+        .unwrap();
     assert_eq!(r2, vec!["10"]);
 
     let r3 = store.search("docs", "hello", true, 10, None).unwrap();

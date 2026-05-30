@@ -15,9 +15,7 @@ async fn main() {
         Ok(val) => EnvFilter::new(val),
         Err(_) => EnvFilter::new(app_config.log_level.as_deref().unwrap_or("info")),
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(log_filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(log_filter).init();
 
     tracing::info!(
         data_dir = %data_dir,
