@@ -36,7 +36,7 @@ Config file parsing is **silently lenient** — on any error it falls back to de
 
 ### Docs Site
 
-Documentation lives in `docs/` (VitePress, managed via **bun**):
+Documentation lives in `docs/` (VitePress, managed via **npm**):
 
 ```sh
 cd docs && npm install && npm run docs:dev
