@@ -17,9 +17,7 @@ export default defineConfig({
     sidebar: [
       {
         text: "Getting Started",
-        items: [
-          { text: "Quickstart", link: "/quickstart" },
-        ],
+        items: [{ text: "Quickstart", link: "/quickstart" }],
       },
       {
         text: "Guides",
@@ -29,7 +27,10 @@ export default defineConfig({
             items: [
               { text: "Creating Collections", link: "/creating-collections" },
               { text: "Listing Collections", link: "/listing-collections" },
-              { text: "Viewing Collection Metadata", link: "/viewing-collection-metadata" },
+              {
+                text: "Viewing Collection Metadata",
+                link: "/viewing-collection-metadata",
+              },
               { text: "Deleting Collections", link: "/deleting-collections" },
             ],
           },
@@ -41,7 +42,10 @@ export default defineConfig({
             ],
           },
           { text: "Searching Documents", link: "/searching-documents" },
-          { text: "Autocomplete Suggestions", link: "/autocomplete-suggestions" },
+          {
+            text: "Autocomplete Suggestions",
+            link: "/autocomplete-suggestions",
+          },
           { text: "Deploying", link: "/deploying" },
         ],
       },
@@ -54,6 +58,7 @@ export default defineConfig({
           { text: "API Reference", link: "/api-reference" },
           { text: "Error Handling", link: "/error-handling" },
           { text: "Status", link: "/status" },
+          { text: "Architecture", link: "/architecture" },
         ],
       },
       { text: "About", link: "/about" },
