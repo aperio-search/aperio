@@ -1,0 +1,33 @@
+name: JS Package CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/js/**
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/js/**
+
+defaults:
+  run:
+    working-directory: packages/js
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/js/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run build
