@@ -38,51 +38,187 @@ docker build -t aperio .
 docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" aperio
 ```
 
-### Build from source
+## Architecture
 
-```bash
-git clone https://github.com/aperio-search/aperio.git
-cd aperio
-cargo build --release
-./target/release/aperio
+### System Overview
+
+```
+┌───────────────────────────────────────────────────┐
+│                    Client                         │
+├───────────────────────────────────────────────────┤
+│                   HTTP (port 3000)                │
+├───────────────────────────────────────────────────┤
+│          Axum Router (src/routes.rs)              │
+│     /collections  /search  /suggest  /items       │
+├───────────────────────────────────────────────────┤
+│            Store Engine (src/store.rs)            │
+│  Inverted Index  ·  Tokenization  ·  ID Strategy  │
+├───────────────────────────────────────────────────┤
+│            fjall LSM-tree Database                │
+│        Keyspaces: _collections, _index_queue,     │
+│           {col}.inverted, {col}.docs              │
+└───────────────────────────────────────────────────┘
 ```
 
-## Quickstart
+The server has three layers:
 
-```bash
-cargo run --release
-# server starts on http://0.0.0.0:3000
+1. **HTTP Layer** — Axum router exposing REST endpoints.
+2. **Store Engine** — Core logic: tokenization, inverted index management, search/insert.
+3. **Persistence Layer** — [fjall](https://github.com/fjall-rs/fjall) LSM-tree database for on-disk storage.
 
-# create a collection
-curl -X POST http://localhost:3000/collections \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"posts","id_type":"string"}'
+### HTTP Layer (`src/routes.rs`)
 
-# index a document
-curl -X POST http://localhost:3000/collections/posts/items \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"1","content":"Hello world from Aperio"}'
+An Axum `Router` maps endpoints to handler functions that delegate to the `Store`. All state is shared via `Arc<Store>`.
 
-# search
-curl "http://localhost:3000/collections/posts/search?q=hello&take=10"
+| Method | Path | Handler |
+|---|---|---|
+| `GET` | `/status` | Health check |
+| `GET` | `/collections` | List collections |
+| `POST` | `/collections` | Create collection |
+| `GET` | `/collections/{name}` | Collection metadata |
+| `DELETE` | `/collections/{name}` | Delete collection |
+| `POST` | `/collections/{name}/items` | Upsert document |
+| `DELETE` | `/collections/{name}/items/{id}` | Delete document |
+| `GET` | `/collections/{name}/search?q=...` | Search documents |
+| `GET` | `/collections/{name}/suggest?q=...` | Autocomplete |
+
+### Store Engine (`src/store.rs`)
+
+The `Store` struct is the heart of Aperio. It holds:
+
+- **`db: fjall::Database`** — the underlying database handle.
+- **`config: StoreConfig`** — tunable parameters (shard sizes, token length, compression, index interval).
+- **`collections: RwLock<HashMap<String, IdType>>`** — in-memory registry of known collections and their ID type.
+- **`lock: Mutex<()>`** — serializes write operations (upsert/delete) for index consistency.
+- **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
+- **`background_active: AtomicBool`** — whether the background indexer is running.
+
+#### Tokenization
+
+Document content is tokenized using [charabia](https://github.com/meilisearch/charabia):
+
+```
+content → tokenize() → filter(is_word) → lemma() → filter(min_token_length)
 ```
 
-## Quick links
+Tokens are deduplicated into a `HashSet<String>` before indexing.
 
-- Search
-  - [Inserting items](https://aperiosearch.com/inserting-items.html)
-  - [Searching](https://aperiosearch.com/search.html)
-  - [Autocomplete / suggest](https://aperiosearch.com/autocomplete.html)
-  - [Delete items](https://aperiosearch.com/deleting-items.html)
+#### Inverted Index
 
-- Collections
-  - [Create a collection](https://aperiosearch.com/creating-collections.html)
-  - [Collection metadata](https://aperiosearch.com/collection-metadata.html)
-  - [List collections](https://aperiosearch.com/listing-collections.html)
-  - [Delete a collection](https://aperiosearch.com/listing-collections.html)
+Each collection has an inverted index stored in a dedicated fjall keyspace (`{name}.inverted`). For every unique token (word), posting lists map to document IDs.
 
-- Configuration
-  - [Environment variables (`DATA_DIR`, `CONFIG_FILE`)](https://aperiosearch.com/configuration.html)
+**Word markers** — an empty key (`word` → empty bytes) signals that a word exists in the index, enabling fast prefix scans for autocomplete.
+
+#### Two ID Strategies
+
+Collections are created with an `id_type` that determines the posting list format:
+
+| `id_type` | Storage format | Data structure |
+|---|---|---|
+| `string` | rkyv-archived shards | `PostingShard { first, last, ids: Vec<String> }` |
+| `number` | Serialized bitmap shards | `RoaringTreemap` per shard |
+
+##### String IDs
+
+Posting lists are split into shards of configurable `max_shard_size` (default 1000). Each shard stores sorted `Vec<String>` archived via rkyv. A binary search across shards locates the correct shard for insertion.
+
+A `Vec<u64>` would be faster for posting-list operations, but `u64` can't represent arbitrary string IDs like `UUIDs`, so `Vec<String>` is used as the general-purpose format.
+
+##### Number IDs
+
+Posting lists use [RoaringTreemap](https://github.com/RoaringBitmap/roaring-rs) bitmaps, sharded at `max_roaring_shard_size` (default 100,000). Bitmaps offer compact storage and fast bitwise intersection for multi-term queries.
+
+#### Search Execution
+
+1. **Tokenize** the query string.
+2. **List shard indices** for each token in parallel (via `std::thread::scope`).
+3. **Sort tokens by shard count** (rarest-first optimization).
+4. **Load posting lists**: for string IDs, merge shards in a sorted iterative merge; for number IDs, union shard bitmaps per word, then compute the intersection.
+5. **Apply sort and pagination**: sort by ID ascending or descending, apply optional `after` cursor, cap at `take`.
+
+#### Search: String IDs
+
+For string-ID collections, each shard is an rkyv-archived `PostingShard`. The engine loads all shards for the rarest word, then iterates through its sorted IDs, checking membership in other words' shards via binary search.
+
+#### Search: Number IDs
+
+For number-ID collections, each shard is a `RoaringTreemap`. Per word, all shards are merged with bitwise OR. Words are then intersected with bitwise AND. The resulting bitmap is iterated in ascending or descending order.
+
+### Background Indexing (`spawn_background`)
+
+When the background indexer is active, `upsert()` writes to a FIFO queue (`_index_queue` keyspace) instead of directly updating the index. A `tokio::spawn` task polls the queue at `index_interval` (default 900ms) and calls `process_pending_queue()` to drain entries through `upsert_internal()`.
+
+This batches write operations and reduces lock contention. When the background indexer is not active (e.g., in tests), `upsert()` calls `upsert_internal()` synchronously.
+
+### Persistence Layer (fjall)
+
+[fjall](https://github.com/fjall-rs/fjall) is an embedded LSM-tree storage engine (a RocksDB/Sled alternative). Aperio uses these fjall keyspaces:
+
+| Keyspace | Purpose |
+|---|---|
+| `_collections` | Collection name → `IdType` mapping |
+| `_index_queue` | Pending index operations (background indexing) |
+| `{name}.inverted` | Inverted index per collection (word → posting lists) |
+| `{name}.docs` | Document tokens per collection (id → `Vec<String>`) |
+
+Configurable fjall options exposed via `StoreConfig`:
+
+- `write_buffer_size` — memtable size.
+- `compression` — `"none"` or `"lz4"` for data block compression.
+- `block_cache_size` — global block cache for the database.
+
+### Configuration (`src/config.rs`)
+
+Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is silently lenient and errors fall back to defaults with a warning. The `AppConfig` struct maps one-to-one with `StoreConfig` fields plus server-level options (`block_cache_size`, `maintenance_threads`, `log_level`).
+
+### Error Handling (`src/error.rs`)
+
+All operations return `Result<T, AppError>`, an enum that maps to appropriate HTTP status codes:
+
+| Error variant | HTTP status |
+|---|---|
+| `NotFound` | 404 |
+| `BadRequest` | 400 |
+| `Internal` | 500 |
+
+Axum's `IntoResponse` impl renders errors as JSON: `{"error": "message"}`.
+
+### Data Flow: Document Insertion
+
+```
+Client → POST /collections/{name}/items
+  → routes::upsert_item()
+    → store.upsert(name, id, content)
+      → [background active?]
+        → Yes: write to _index_queue → return
+        → No:  lock() → upsert_internal()
+          → tokenize content (charabia)
+          → load old tokens from {name}.docs
+          → remove stale posting list entries
+          → add/update posting list entries
+          → store new tokens in {name}.docs
+          → unlock()
+```
+
+### Data Flow: Search
+
+```
+Client → GET /collections/{name}/search?q=...
+  → routes::search()
+    → store.search(name, query, sort, take, after)
+      → validate collection exists
+      → tokenize query
+      → parallel: list shard indices per word
+      → sort by rarest word first
+      → parallel: load posting lists
+      → [string IDs]: sorted merge + membership check
+      → [number IDs]: bitmap union + intersection
+      → apply after-cursor, sort, limit
+      → return Vec<String>
+```
+
+> [!WARNING]
+Treat the Architecture section as a **narrative companion** for developers who enjoy reading about low level engineering, not as operational documentation you would rely on for debugging or performance tuning. **If something here contradicts the code, the code wins.**
 
 ## Architecture
 
