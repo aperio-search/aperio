@@ -441,15 +441,25 @@ impl Store {
         };
 
         let docs = self.docs_keyspace(collection)?;
-        let results: Vec<serde_json::Value> = ids
-            .iter()
-            .filter_map(|id| {
-                docs.get(id.as_bytes())
-                    .ok()
-                    .flatten()
-                    .and_then(|data| serde_json::from_slice(&data).ok())
-            })
-            .collect();
+        let results: Vec<serde_json::Value> = std::thread::scope(|s| {
+            let handles: Vec<_> = ids
+                .iter()
+                .map(|id| {
+                    let docs = docs.clone();
+                    let id = id.clone();
+                    s.spawn(move || {
+                        docs.get(id.as_bytes())
+                            .ok()
+                            .flatten()
+                            .and_then(|data| serde_json::from_slice(&data).ok())
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok().flatten())
+                .collect()
+        });
 
         tracing::debug!(collection = %collection, query = %query, results = results.len(), "search completed");
         Ok(results)
