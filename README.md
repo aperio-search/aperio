@@ -1,7 +1,7 @@
 <h1 align="center">Aperio</h1>
 
 <p align="center">
-<img src="images/banner.jpg" alt="Aperio banner" width="100%">
+<img src="assets/banner.jpg" alt="Aperio banner" width="100%">
 </p>
 
 <p align="center">
