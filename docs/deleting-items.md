@@ -1,4 +1,4 @@
-# Delete Items
+# Deleting Items
 
 Deletes a single item from a collection by its `ID`.
 

@@ -1,4 +1,4 @@
-# Delete Collections
+# Deleting Collections
 
 Drops an entire collection index and its associated internal storage completely.
 

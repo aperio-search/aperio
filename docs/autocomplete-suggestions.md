@@ -1,4 +1,4 @@
-# Autocomplete
+# Autocomplete Suggestions
 
 Returns autocomplete suggestions based on the last word in the query. For example, searching `"application pro"` will suggest completions for `"pro"` (e.g. `"programming"`, `"process"`).
 
