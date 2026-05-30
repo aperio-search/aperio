@@ -29,9 +29,10 @@ mod tests {
         let resp = SearchResponse {
             results: vec![serde_json::json!({"id": "a"}), serde_json::json!({"id": "b"})],
             take: 2,
+            elapsed_ms: 0.0,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"results":[{"id":"a"},{"id":"b"}],"take":2}"#);
+        assert_eq!(json, r#"{"results":[{"id":"a"},{"id":"b"}],"take":2,"elapsed_ms":0.0}"#);
     }
 
     #[test]
@@ -39,9 +40,10 @@ mod tests {
         let resp: SearchResponse = SearchResponse {
             results: vec![],
             take: 0,
+            elapsed_ms: 1.5,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"results":[],"take":0}"#);
+        assert_eq!(json, r#"{"results":[],"take":0,"elapsed_ms":1.5}"#);
     }
 
     #[test]
@@ -127,6 +129,7 @@ pub struct SearchParams {
 pub struct SearchResponse {
     pub results: Vec<serde_json::Value>,
     pub take: usize,
+    pub elapsed_ms: f64,
 }
 
 #[derive(Deserialize)]

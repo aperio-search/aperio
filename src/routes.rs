@@ -84,6 +84,7 @@ async fn search(
         .store
         .search(&collection, &params.q, sort_desc, take, after)?;
     let elapsed = t0.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
     tracing::info!(
         query = %params.q,
         collection = %collection,
@@ -91,7 +92,7 @@ async fn search(
         results = results.len(),
         "search completed"
     );
-    Ok(Json(SearchResponse { results, take }))
+    Ok(Json(SearchResponse { results, take, elapsed_ms }))
 }
 
 async fn suggest(
