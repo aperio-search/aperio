@@ -32,7 +32,7 @@ cargo run                # dev server on :3000, data persists to ./data/aperio_d
 | `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio_data`) |
 | `CONFIG_FILE` | — | Path to optional TOML config file |
 
-Config file parsing is **silently lenient** — on any error it falls back to defaults with only a warning to stderr.
+Config file parsing is **strict** — on any read or parse error the process panics with a clear message.
 
 ### Docs Site
 
@@ -57,9 +57,11 @@ cd docs && npm install && npm run docs:dev
 src/
   main.rs       — entrypoint, reads env vars, opens fjall DB, binds :3000
   lib.rs        — pub mod declarations
+  auth.rs       — API key authentication middleware
+  backup.rs     — snapshot export/import
   config.rs     — optional TOML config parsing
   routes.rs     — Axum router with REST endpoints
-  store.rs      — core engine: tokenization, inverted index, two ID strategies
+  store/        — core engine: tokenization, inverted index, two ID strategies (mod.rs, config.rs, posting_list.rs, search.rs)
 tests/
   store.rs      — store integration tests (real fjall DB in tempdir)
   api.rs        — HTTP API integration tests via tower::ServiceExt

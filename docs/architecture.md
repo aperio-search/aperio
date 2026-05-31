@@ -1,8 +1,5 @@
 # Architecture
 
-> [!WARNING]
-Treat this page as a **narrative companion** for developers who enjoy reading about low level engineering, not as operational documentation you would rely on for debugging or performance tuning. **If something here contradicts the code, the code wins.**
-
 ## System Overview
 
 ```
@@ -14,8 +11,10 @@ Treat this page as a **narrative companion** for developers who enjoy reading ab
 │          Axum Router (src/routes.rs)              │
 │         /collections  /search  /items             │
 ├───────────────────────────────────────────────────┤
-│            Store Engine (src/store.rs)            │
+│            Store Engine (src/store/)              │
 │  Inverted Index  ·  Tokenization  ·  ID Strategy  │
+├───────────────────────────────────────────────────┤
+│    Auth (src/auth.rs)  ·  Backup (src/backup.rs)  │
 ├───────────────────────────────────────────────────┤
 │            fjall LSM-tree Database                │
 │        Keyspaces: _collections, _index_queue,     │
@@ -23,15 +22,16 @@ Treat this page as a **narrative companion** for developers who enjoy reading ab
 └───────────────────────────────────────────────────┘
 ```
 
-The server has three layers:
+The server has four layers:
 
 1. **HTTP Layer** — Axum router exposing REST endpoints.
-2. **Store Engine** — Core logic: tokenization, inverted index management, search/insert.
-3. **Persistence Layer** — [fjall](https://github.com/fjall-rs/fjall) LSM-tree database for on-disk storage.
+2. **Auth & Backup** — API key authentication (`src/auth.rs`) and snapshot export/import (`src/backup.rs`).
+3. **Store Engine** — Core logic: tokenization, inverted index management, search/insert (`src/store/` sub-modules).
+4. **Persistence Layer** — [fjall](https://github.com/fjall-rs/fjall) LSM-tree database for on-disk storage.
 
 ## HTTP Layer (`src/routes.rs`)
 
-An Axum `Router` maps endpoints to handler functions that delegate to the `Store`. All state is shared via `Arc<Store>`.
+An Axum `Router` maps endpoints to handler functions that delegate to the `Store`. All state is shared via `Arc<AppState>` (`store` + optional `dumps_folder`). Every endpoint (except `/status`) requires an API key via the `Authorization` header, enforced by `src/auth.rs`. Two tiers of access: the **main** key has full access; the **search** key is restricted to `GET …/search`.
 
 | Method | Path | Handler |
 |---|---|---|
@@ -46,9 +46,9 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `POST` | `/backup/export` | Export database snapshot to a file in the dumps folder |
 | `POST` | `/backup/import` | Import a snapshot from the dumps folder |
 
-## Store Engine (`src/store.rs`)
+## Store Engine (`src/store/`)
 
-The `Store` struct is the heart of Aperio. It holds:
+The `Store` struct (in `src/store/mod.rs`) is the heart of Aperio. It holds:
 
 - **`db: fjall::Database`** — the underlying database handle.
 - **`config: StoreConfig`** — tunable parameters (shard sizes, token length, compression, index interval).
@@ -56,6 +56,11 @@ The `Store` struct is the heart of Aperio. It holds:
 - **`lock: Mutex<()>`** — serializes write operations (upsert/delete) for index consistency.
 - **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
 - **`background_active: AtomicBool`** — whether the background indexer is running.
+
+The store logic is split across sub-modules:
+- `src/store/config.rs` — `StoreConfig`, `IdType`, `CollectionMeta`, `PostingShard`, `QueuedIndex`.
+- `src/store/posting_list.rs` — shard-based posting list operations for both ID strategies.
+- `src/store/search.rs` — search execution (intersection, cursor pagination) for string and number IDs.
 
 ### Tokenization
 
@@ -127,11 +132,15 @@ Configurable fjall options exposed via `StoreConfig`:
 
 - `write_buffer_size` — memtable size.
 - `compression` — `"none"` or `"lz4"` for data block compression.
-- `block_cache_size` — global block cache for the database.
+- `block_cache_size` — global block cache for the database (set on `Database::builder`, not `StoreConfig`).
+- `roaring_inverted_block_size`, `string_inverted_block_size`, `docs_block_size`, `queue_block_size`, `meta_block_size` — per-keyspace data block sizes.
+- `inverted_hash_ratio`, `docs_hash_ratio` — hash index ratios for inverted/doc keyspaces.
+- `index_interval` — interval between background index queue flushes.
+- `max_queue_batch_size` — items processed per background tick.
 
 ## Configuration (`src/config.rs`)
 
-Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is silently lenient and errors fall back to defaults with a warning. The `AppConfig` struct maps one-to-one with `StoreConfig` fields plus server-level options (`block_cache_size`, `maintenance_threads`, `log_level`, `dumps_folder`).
+Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is **strict**: on any read or parse error the process panics with a clear message. The `AppConfig` struct maps one-to-one with `StoreConfig` fields plus server-level options (`block_cache_size`, `maintenance_threads`, `log_level`, `main_api_key`, `search_api_key`, `dumps_folder`).
 
 The `dumps_folder` config option sets the directory for backup snapshots. It defaults to `None` (unset) — if missing, `POST /backup/export` and `POST /backup/import` return `400 Bad Request`. This prevents accidental file writes when the operator hasn't explicitly configured a dump location.
 
@@ -184,3 +193,5 @@ Client → GET /collections/{name}/search?q=...
       → look up full JSON docs from {name}.docs
       → return Vec<serde_json::Value>
 ```
+
+Treat this page as a **narrative companion** for developers who enjoy reading about low level engineering, not as operational documentation you would rely on for debugging or performance tuning. **If something here contradicts the code, the code wins.**
