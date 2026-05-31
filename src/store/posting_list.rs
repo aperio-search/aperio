@@ -19,12 +19,8 @@ pub fn load_posting_shard(
     let key = shard_key(word, shard);
     match inverted.get(&key)? {
         Some(data) => {
-            let shard: PostingShard =
-                decode_rkyv!(PostingShard, &data).unwrap_or_else(|_| PostingShard {
-                    first: String::new(),
-                    last: String::new(),
-                    ids: Vec::new(),
-                });
+            let shard: PostingShard = decode_rkyv!(PostingShard, &data)
+                .unwrap_or_else(|_| PostingShard { ids: Vec::new() });
             Ok(Some(shard))
         }
         None => Ok(None),
@@ -55,17 +51,6 @@ pub fn find_shard_for_id(
     id: &str,
     indices: &[usize],
 ) -> Result<usize, AppError> {
-    let first_shard =
-        load_posting_shard(inverted, word, indices[0])?.unwrap_or_else(|| PostingShard {
-            first: String::new(),
-            last: String::new(),
-            ids: Vec::new(),
-        });
-
-    if *id < *first_shard.first {
-        return Ok(indices[0]);
-    }
-
     let mut lo = 0usize;
     let mut hi = indices.len().saturating_sub(1);
     while lo <= hi {
@@ -77,12 +62,14 @@ pub fn find_shard_for_id(
                 continue;
             }
         };
-        if *id < *shard.first {
+        let shard_first = shard.ids.first().map(|s| s.as_str()).unwrap_or("");
+        let shard_last = shard.ids.last().map(|s| s.as_str()).unwrap_or("");
+        if *id < *shard_first {
             if mid == 0 {
                 return Ok(indices[0]);
             }
             hi = mid - 1;
-        } else if *id > *shard.last {
+        } else if *id > *shard_last {
             lo = mid + 1;
         } else {
             return Ok(indices[mid]);
@@ -102,8 +89,6 @@ pub fn add_to_posting_list(
 
     if indices.is_empty() {
         let shard = PostingShard {
-            first: id.to_string(),
-            last: id.to_string(),
             ids: vec![id.to_string()],
         };
         let value = encode_rkyv!(&shard)?;
@@ -112,27 +97,25 @@ pub fn add_to_posting_list(
     }
 
     let last_idx = *indices.last().unwrap();
-    let last_shard =
-        load_posting_shard(inverted, word, last_idx)?.unwrap_or_else(|| PostingShard {
-            first: String::new(),
-            last: String::new(),
-            ids: Vec::new(),
-        });
+    let last_shard = load_posting_shard(inverted, word, last_idx)?
+        .unwrap_or_else(|| PostingShard { ids: Vec::new() });
 
-    if *id > *last_shard.last {
+    if last_shard
+        .ids
+        .last()
+        .map(|s| id > s.as_str())
+        .unwrap_or(true)
+    {
         if last_shard.ids.len() < max_shard_size {
             if last_shard.ids.binary_search(&id.to_string()).is_ok() {
                 return Ok(());
             }
             let mut new_shard = last_shard;
             new_shard.ids.push(id.to_string());
-            new_shard.last = id.to_string();
             let new_value = encode_rkyv!(&new_shard)?;
             batch.insert(inverted, shard_key(word, last_idx), &new_value);
         } else {
             let shard = PostingShard {
-                first: id.to_string(),
-                last: id.to_string(),
                 ids: vec![id.to_string()],
             };
             let value = encode_rkyv!(&shard)?;
@@ -142,11 +125,8 @@ pub fn add_to_posting_list(
     }
 
     let target = find_shard_for_id(inverted, word, id, &indices)?;
-    let current = load_posting_shard(inverted, word, target)?.unwrap_or_else(|| PostingShard {
-        first: String::new(),
-        last: String::new(),
-        ids: Vec::new(),
-    });
+    let current = load_posting_shard(inverted, word, target)?
+        .unwrap_or_else(|| PostingShard { ids: Vec::new() });
 
     if current.ids.binary_search(&id.to_string()).is_ok() {
         return Ok(());
@@ -155,12 +135,6 @@ pub fn add_to_posting_list(
     let pos = current.ids.binary_search(&id.to_string()).unwrap_err();
     let mut new_shard = current;
     new_shard.ids.insert(pos, id.to_string());
-    if pos == 0 {
-        new_shard.first = id.to_string();
-    }
-    if pos == new_shard.ids.len() - 1 {
-        new_shard.last = id.to_string();
-    }
 
     let new_value = encode_rkyv!(&new_shard)?;
     batch.insert(inverted, shard_key(word, target), &new_value);
@@ -190,8 +164,6 @@ pub fn remove_from_posting_list(
         Err(_) => return Ok(()),
     };
 
-    let ran_first = pos == 0;
-    let ran_last = pos == current.ids.len() - 1;
     let mut new_shard = current;
     new_shard.ids.remove(pos);
 
@@ -199,12 +171,6 @@ pub fn remove_from_posting_list(
     if new_shard.ids.is_empty() {
         batch.remove(inverted, &key);
     } else {
-        if ran_first {
-            new_shard.first = new_shard.ids[0].clone();
-        }
-        if ran_last {
-            new_shard.last = new_shard.ids.last().unwrap().clone();
-        }
         let new_value = encode_rkyv!(&new_shard)?;
         batch.insert(inverted, &key, &new_value);
     }
@@ -261,23 +227,56 @@ pub fn remove_from_roaring_posting_list(
         return Ok(());
     }
 
-    for &shard_idx in &indices {
-        let key = shard_key(word, shard_idx);
-        let mut bitmap: RoaringTreemap = match inverted.get(&key)? {
-            Some(data) => roaring_from_slice(&data)?,
-            None => continue,
-        };
-        if !bitmap.contains(id) {
-            continue;
+    let target = {
+        let mut lo = 0usize;
+        let mut hi = indices.len().saturating_sub(1);
+        loop {
+            if lo > hi {
+                break indices[lo.min(indices.len().saturating_sub(1))];
+            }
+            let mid = (lo + hi) / 2;
+            let key = shard_key(word, indices[mid]);
+            let data = match inverted.get(&key)? {
+                Some(d) => d,
+                None => {
+                    lo = mid + 1;
+                    continue;
+                }
+            };
+            let bitmap = roaring_from_slice(&data)?;
+            let shard_first = bitmap.min().unwrap_or(0);
+            let shard_last = bitmap.max().unwrap_or(0);
+            if id < shard_first {
+                if mid == 0 {
+                    break indices[0];
+                }
+                hi = mid - 1;
+            } else if id > shard_last {
+                lo = mid + 1;
+            } else {
+                break indices[mid];
+            }
         }
-        bitmap.remove(id);
-        if bitmap.is_empty() {
-            batch.remove(inverted, &key);
-        } else {
-            let value = roaring_to_vec(&bitmap)?;
-            batch.insert(inverted, &key, &value);
-        }
+    };
+
+    let key = shard_key(word, target);
+    let data = match inverted.get(&key)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+
+    let mut bitmap = roaring_from_slice(&data)?;
+    if !bitmap.contains(id) {
         return Ok(());
+    }
+
+    bitmap.remove(id);
+
+    if bitmap.is_empty() {
+        batch.remove(inverted, &key);
+    } else {
+        let value = roaring_to_vec(&bitmap)?;
+        batch.insert(inverted, &key, &value);
     }
 
     Ok(())

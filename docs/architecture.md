@@ -82,7 +82,7 @@ Collections are created with an `id_type` that determines the posting list forma
 
 | `id_type` | Storage format | Data structure |
 |---|---|---|
-| `string` | rkyv-archived shards | `PostingShard { first, last, ids: Vec<String> }` |
+| `string` | rkyv-archived shards | `PostingShard { ids: Vec<String> }` |
 | `number` | Serialized bitmap shards | `RoaringTreemap` per shard |
 
 #### String IDs
