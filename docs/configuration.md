@@ -25,6 +25,8 @@ block_cache_size = 536870912           # 512 MiB
 write_buffer_size = 67108864           # 64 MiB
 maintenance_threads = 4
 compression = "lz4"
+# inverted_hash_ratio = 8.0      # hash index for {collection}.inverted (default: 8.0)
+# docs_hash_ratio = 8.0          # hash index for {collection}.docs (default: 8.0)
 roaring_inverted_block_size = 16384    # 16 KiB — roaring bitmap inverted index keyspace
 string_inverted_block_size = 65536     # 64 KiB — string ID inverted index keyspace
 docs_block_size = 8192                 # 8 KiB — document storage keyspace
@@ -49,6 +51,8 @@ dumps_folder = "/data/dumps"           # backup snapshot directory
 | `write_buffer_size` | `integer` (bytes) | `67108864` (64 MiB, fjall default) | Per-keyspace memtable (write buffer) size. Larger values reduce write amplification at the cost of memory |
 | `maintenance_threads` | `integer` | `min(# CPUs, 4)` | Number of background worker threads for compaction, flush, and journal maintenance |
 | `compression` | `string` | `"none"` (fjall default) | Data block compression algorithm: `"none"` or `"lz4"` |
+| `inverted_hash_ratio` | `float` | `8.0` | Hash index ratio for `{collection}.inverted` keyspaces. Higher = more buckets per key, better point-read performance. `0.0` disables. fjall benchmark sweet spot is `8.0` |
+| `docs_hash_ratio` | `float` | `8.0` | Hash index ratio for `{collection}.docs` keyspaces. Same semantics as `inverted_hash_ratio` |
 | `roaring_inverted_block_size` | `integer` (bytes) | `16384` (16 KiB) | Data block size for `{collection}.inverted` keyspaces of **number**-type collections (RoaringTreemap bitmaps). Small blocks favour point lookups during search |
 | `string_inverted_block_size` | `integer` (bytes) | `65536` (64 KiB) | Data block size for `{collection}.inverted` keyspaces of **string**-type collections (rkyv-archived shards) |
 | `docs_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `{collection}.docs` keyspaces (stored documents). Larger blocks improve range-scan throughput |

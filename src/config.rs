@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub meta_block_size: Option<u32>,
     pub maintenance_threads: Option<usize>,
     pub compression: Option<String>,
+    pub inverted_hash_ratio: Option<f32>,
+    pub docs_hash_ratio: Option<f32>,
     pub log_level: Option<String>,
     pub index_interval_ms: Option<u64>,
     pub max_queue_batch_size: Option<usize>,
@@ -57,6 +59,8 @@ impl AppConfig {
             queue_block_size: self.queue_block_size.unwrap_or(32768),
             meta_block_size: self.meta_block_size.unwrap_or(8192),
             compression: self.compression.and_then(|s| parse_compression(&s)),
+            inverted_hash_ratio: self.inverted_hash_ratio.unwrap_or(8.0),
+            docs_hash_ratio: self.docs_hash_ratio.unwrap_or(8.0),
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
             max_queue_batch_size: self.max_queue_batch_size.unwrap_or(5000),
         }
@@ -193,6 +197,8 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.queue_block_size, 32768);
         assert_eq!(store_cfg.meta_block_size, 8192);
         assert!(store_cfg.compression.is_none());
+        assert_eq!(store_cfg.inverted_hash_ratio, 8.0);
+        assert_eq!(store_cfg.docs_hash_ratio, 8.0);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(900));
         assert_eq!(store_cfg.max_queue_batch_size, 5000);
     }
@@ -210,6 +216,8 @@ search_api_key = "custom-search-key"
             queue_block_size: Some(65536),
             meta_block_size: Some(4096),
             compression: Some("lz4".into()),
+            inverted_hash_ratio: Some(4.0),
+            docs_hash_ratio: None,
             index_interval_ms: Some(300),
             max_queue_batch_size: Some(500),
             block_cache_size: None,
@@ -230,6 +238,8 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.queue_block_size, 65536);
         assert_eq!(store_cfg.meta_block_size, 4096);
         assert_eq!(store_cfg.compression, Some(fjall::CompressionType::Lz4));
+        assert_eq!(store_cfg.inverted_hash_ratio, 4.0);
+        assert_eq!(store_cfg.docs_hash_ratio, 8.0);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
         assert_eq!(store_cfg.max_queue_batch_size, 500);
     }
