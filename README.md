@@ -141,7 +141,7 @@ Posting lists use [RoaringTreemap](https://github.com/RoaringBitmap/roaring-rs) 
 #### Search Execution
 
 1. **Tokenize** the query string.
-2. **List shard indices** for each token in parallel (via `std::thread::scope`).
+2. **List shard indices** for each token in parallel (via rayon).
 3. **Sort tokens by shard count** (rarest-first optimization).
 4. **Load posting lists**: for string IDs, merge shards in a sorted iterative merge; for number IDs, union shard bitmaps per word, then compute the intersection.
 5. **Apply sort and pagination**: sort by ID ascending or descending, apply optional `after` cursor, cap at `take`.
@@ -156,7 +156,7 @@ For number-ID collections, each shard is a `RoaringTreemap`. Per word, all shard
 
 ### Background Indexing (`spawn_background`)
 
-When the background indexer is active, `upsert()` writes to a FIFO queue (`_index_queue` keyspace) instead of directly updating the index. A `tokio::spawn` task polls the queue at `index_interval` (default 900ms) and calls `process_pending_queue()` to drain entries through `upsert_internal()`.
+When the background indexer is active, `upsert()` writes to a FIFO queue (`_index_queue` keyspace) instead of directly updating the index. A `tokio::spawn` task polls the queue at `index_interval` (default 900ms) and dispatches `process_pending_queue()` on Tokio's blocking thread pool via `spawn_blocking`. Within each batch, tokenization runs in parallel across queued items using rayon, then posting list mutations are applied sequentially to a shared `OwnedWriteBatch`.
 
 This batches write operations and reduces lock contention. When the background indexer is not active (e.g., in tests), `upsert()` calls `upsert_internal()` synchronously.
 
