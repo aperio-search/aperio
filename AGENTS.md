@@ -87,7 +87,7 @@ No CI workflows, no pre-commit hooks, no linter/formatter config files beyond de
 
 Tests live in two places:
 
-- **Unit tests** — `#[cfg(test)] mod tests` blocks at the bottom of `src/config.rs`, `src/error.rs`, `src/models.rs`, and `src/store.rs`.
+- **Unit tests** — `#[cfg(test)] mod tests` blocks at the bottom of `src/config.rs`, `src/error.rs`, `src/models.rs`, and `src/store/mod.rs`.
 - **Integration tests** — standalone files in `tests/`.
 
 All tests use the same dev-dependencies:
