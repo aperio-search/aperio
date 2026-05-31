@@ -83,7 +83,7 @@ pub fn add_to_posting_list(
     inverted: &fjall::Keyspace,
     word: &str,
     id: &str,
-    max_shard_size: usize,
+    max_string_shard_size: usize,
 ) -> Result<(), AppError> {
     let indices = list_shard_indices(inverted, word)?;
 
@@ -106,7 +106,7 @@ pub fn add_to_posting_list(
         .map(|s| id > s.as_str())
         .unwrap_or(true)
     {
-        if last_shard.ids.len() < max_shard_size {
+        if last_shard.ids.len() < max_string_shard_size {
             if last_shard.ids.binary_search(&id.to_string()).is_ok() {
                 return Ok(());
             }

@@ -54,7 +54,7 @@ Config file parsing is **strict**: on any read or parse error the process panics
 ## Two ID strategies (store internals)
 
 Collections are created with an `id_type`:
-- **`string`** — posting lists stored as rkyv-archived shards (max_shard_size configurable)
+- **`string`** — posting lists stored as rkyv-archived shards (max_string_shard_size configurable)
 - **`number`** — posting lists stored as RoaringTreemap bitmaps (max_roaring_shard_size configurable)
 
 `POST /collections` with `{"name": "...", "id_type": "string" | "number"}`.
