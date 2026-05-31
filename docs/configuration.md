@@ -21,17 +21,21 @@ Example `config.toml`:
 min_token_length = 3
 max_shard_size = 1000
 max_roaring_shard_size = 100000
-block_cache_size = 536870912       # 512 MiB
-write_buffer_size = 67108864       # 64 MiB
+block_cache_size = 536870912           # 512 MiB
+write_buffer_size = 67108864           # 64 MiB
 maintenance_threads = 4
 compression = "lz4"
-block_size = 65536                 # 64 KiB
-log_level = "info"                 # trace, debug, info, warn, error
-index_interval_ms = 900            # ms between index queue flushes
-max_queue_batch_size = 1000        # items processed per background tick
-main_api_key = "my-secret-key"     # main API key (full access)
-search_api_key = "my-search-key"   # search-only API key (search & suggest only)
-dumps_folder = "/data/dumps"       # backup snapshot directory
+roaring_inverted_block_size = 16384    # 16 KiB — roaring bitmap inverted index keyspace
+string_inverted_block_size = 65536     # 64 KiB — string ID inverted index keyspace
+docs_block_size = 8192                 # 8 KiB — document storage keyspace
+queue_block_size = 32768               # 32 KiB — index queue keyspace
+meta_block_size = 8192                 # 8 KiB — collection metadata keyspace
+log_level = "info"                     # trace, debug, info, warn, error
+index_interval_ms = 900                # ms between index queue flushes
+max_queue_batch_size = 1000            # items processed per background tick
+main_api_key = "my-secret-key"         # main API key (full access)
+search_api_key = "my-search-key"       # search-only API key (search & suggest only)
+dumps_folder = "/data/dumps"           # backup snapshot directory
 ```
 
 ## Configuration Reference
@@ -45,7 +49,11 @@ dumps_folder = "/data/dumps"       # backup snapshot directory
 | `write_buffer_size` | `integer` (bytes) | `67108864` (64 MiB, fjall default) | Per-keyspace memtable (write buffer) size. Larger values reduce write amplification at the cost of memory |
 | `maintenance_threads` | `integer` | `min(# CPUs, 4)` | Number of background worker threads for compaction, flush, and journal maintenance |
 | `compression` | `string` | `"none"` (fjall default) | Data block compression algorithm: `"none"` or `"lz4"` |
-| `block_size` | `integer` (bytes) | `4096` (4 KiB, fjall default) | Data block size per LSM-tree level. Larger values (e.g. 64 KiB) improve range-scan and prefix-scan throughput; smaller values reduce read amplification for point lookups |
+| `roaring_inverted_block_size` | `integer` (bytes) | `16384` (16 KiB) | Data block size for `{collection}.inverted` keyspaces of **number**-type collections (RoaringTreemap bitmaps). Small blocks favour point lookups during search |
+| `string_inverted_block_size` | `integer` (bytes) | `65536` (64 KiB) | Data block size for `{collection}.inverted` keyspaces of **string**-type collections (rkyv-archived shards). Larger blocks improve prefix-scan throughput for suggest |
+| `docs_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `{collection}.docs` keyspaces (stored documents). Larger blocks improve range-scan throughput |
+| `queue_block_size` | `integer` (bytes) | `32768` (32 KiB) | Data block size for `_index_queue` keyspace. Larger blocks reduce write amplification for sequential append |
+| `meta_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `_collections` keyspace (system metadata). Small blocks favour point lookups |
 | `log_level` | `string` | `"info"` | Log level: `"trace"`, `"debug"`, `"info"`, `"warn"`, or `"error"`. Overridden by the `RUST_LOG` environment variable if set |
 | `index_interval_ms` | `integer` | `900` | Interval in milliseconds between background index queue flushes. Lower values reduce write-to-search latency; higher values batch more work per flush |
 | `max_queue_batch_size` | `integer` | `1000` | Maximum items to pull from the index queue per background tick. Lower values reduce per-tick memory usage during bulk ingestion; higher values drain the queue faster |

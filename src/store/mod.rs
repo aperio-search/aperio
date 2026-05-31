@@ -119,7 +119,7 @@ impl Store {
     pub fn with_config(db: fjall::Database, config: StoreConfig) -> Self {
         let collections = {
             let mut map = HashMap::new();
-            if let Ok(meta) = db.keyspace("_collections", || config.keyspace_opts()) {
+            if let Ok(meta) = db.keyspace("_collections", || config.keyspace_opts(config.meta_block_size)) {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
                         let name = String::from_utf8_lossy(&key).to_string();
@@ -144,7 +144,7 @@ impl Store {
     }
 
     fn init_next_seq(db: &fjall::Database, config: &StoreConfig) -> u64 {
-        let queue = match db.keyspace("_index_queue", || config.keyspace_opts()) {
+        let queue = match db.keyspace("_index_queue", || config.keyspace_opts(config.queue_block_size)) {
             Ok(q) => q,
             Err(_) => return 1,
         };
@@ -164,26 +164,30 @@ impl Store {
         max + 1
     }
 
-    fn inverted_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
+    fn inverted_keyspace(&self, collection: &str, id_type: IdType) -> Result<fjall::Keyspace, AppError> {
+        let block_size = match id_type {
+            IdType::Number => self.config.roaring_inverted_block_size,
+            IdType::String => self.config.string_inverted_block_size,
+        };
         let name = format!("{}.inverted", collection);
-        Ok(self.db.keyspace(&name, || self.config.keyspace_opts())?)
+        Ok(self.db.keyspace(&name, || self.config.keyspace_opts(block_size))?)
     }
 
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.docs", collection);
-        Ok(self.db.keyspace(&name, || self.config.keyspace_opts())?)
+        Ok(self.db.keyspace(&name, || self.config.keyspace_opts(self.config.docs_block_size))?)
     }
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self
             .db
-            .keyspace("_collections", || self.config.keyspace_opts())?)
+            .keyspace("_collections", || self.config.keyspace_opts(self.config.meta_block_size))?)
     }
 
     fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self
             .db
-            .keyspace("_index_queue", || self.config.keyspace_opts())?)
+            .keyspace("_index_queue", || self.config.keyspace_opts(self.config.queue_block_size))?)
     }
 
     fn allocate_seq(&self) -> u64 {
@@ -260,7 +264,7 @@ impl Store {
     ) -> Result<(), AppError> {
         let meta = self.validate_collection_exists(collection)?;
 
-        let inverted = self.inverted_keyspace(collection)?;
+        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
         let docs = self.docs_keyspace(collection)?;
         let searchable_content = extract_searchable_content(doc, &meta.searchable_fields);
         let new_words = tokenize(&searchable_content, self.config.min_token_length);
@@ -421,7 +425,7 @@ impl Store {
         after: Option<&str>,
     ) -> Result<Vec<serde_json::Value>, AppError> {
         let meta = self.validate_collection_exists(collection)?;
-        let inverted = self.inverted_keyspace(collection)?;
+        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
         let ids = match meta.id_type {
             IdType::Number => search::roaring_search(
                 &inverted,
@@ -467,8 +471,8 @@ impl Store {
     }
 
     pub fn suggest(&self, collection: &str, prefix: &str) -> Result<Vec<String>, AppError> {
-        self.validate_collection_exists(collection)?;
-        let inverted = self.inverted_keyspace(collection)?;
+        let meta = self.validate_collection_exists(collection)?;
+        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
         let last_word = prefix.split_whitespace().last().unwrap_or(prefix);
         let normalized = last_word
             .tokenize()
@@ -499,7 +503,7 @@ impl Store {
 
         let _lock = self.lock.lock().unwrap();
 
-        let inverted = self.inverted_keyspace(collection)?;
+        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
         let docs = self.docs_keyspace(collection)?;
 
         let doc_data = docs
@@ -589,7 +593,7 @@ impl Store {
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
-        self.validate_collection_exists(collection)?;
+        let meta = self.validate_collection_exists(collection)?;
 
         let _lock = self.lock.lock().unwrap();
 
@@ -597,16 +601,20 @@ impl Store {
 
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
+            let inv_block_size = match meta.id_type {
+                IdType::Number => self.config.roaring_inverted_block_size,
+                IdType::String => self.config.string_inverted_block_size,
+            };
             let inv = self
                 .db
-                .keyspace(&inv_name, || self.config.keyspace_opts())?;
+                .keyspace(&inv_name, || self.config.keyspace_opts(inv_block_size))?;
             self.db.delete_keyspace(inv)?;
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
             let docs = self
                 .db
-                .keyspace(&docs_name, || self.config.keyspace_opts())?;
+                .keyspace(&docs_name, || self.config.keyspace_opts(self.config.docs_block_size))?;
             self.db.delete_keyspace(docs)?;
         }
 
@@ -731,7 +739,11 @@ mod tests {
         assert_eq!(cfg.max_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
         assert!(cfg.write_buffer_size.is_none());
-        assert!(cfg.block_size.is_none());
+        assert_eq!(cfg.roaring_inverted_block_size, 16384);
+        assert_eq!(cfg.string_inverted_block_size, 65536);
+        assert_eq!(cfg.docs_block_size, 8192);
+        assert_eq!(cfg.queue_block_size, 32768);
+        assert_eq!(cfg.meta_block_size, 8192);
         assert!(cfg.compression.is_none());
     }
 

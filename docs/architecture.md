@@ -120,7 +120,7 @@ This batches write operations and reduces lock contention. When the background i
 [fjall](https://github.com/fjall-rs/fjall) is an embedded LSM-tree storage engine (a RocksDB/Sled alternative). Aperio uses these fjall keyspaces:
 
 | Keyspace | Purpose |
-|---|---|---|
+|---|---|
 | `_collections` | Collection name → `CollectionMeta` (ID type + searchable fields) |
 | `_index_queue` | Pending index operations (background indexing) |
 | `{name}.inverted` | Inverted index per collection (word → posting lists) |

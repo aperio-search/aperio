@@ -13,7 +13,11 @@ pub struct AppConfig {
     pub max_roaring_shard_size: Option<u64>,
     pub block_cache_size: Option<u64>,
     pub write_buffer_size: Option<u64>,
-    pub block_size: Option<u32>,
+    pub roaring_inverted_block_size: Option<u32>,
+    pub string_inverted_block_size: Option<u32>,
+    pub docs_block_size: Option<u32>,
+    pub queue_block_size: Option<u32>,
+    pub meta_block_size: Option<u32>,
     pub maintenance_threads: Option<usize>,
     pub compression: Option<String>,
     pub log_level: Option<String>,
@@ -58,10 +62,14 @@ impl AppConfig {
             max_shard_size: self.max_shard_size.unwrap_or(1000),
             max_roaring_shard_size: self.max_roaring_shard_size.unwrap_or(100_000),
             write_buffer_size: self.write_buffer_size,
-            block_size: self.block_size,
+            roaring_inverted_block_size: self.roaring_inverted_block_size.unwrap_or(16384),
+            string_inverted_block_size: self.string_inverted_block_size.unwrap_or(65536),
+            docs_block_size: self.docs_block_size.unwrap_or(8192),
+            queue_block_size: self.queue_block_size.unwrap_or(32768),
+            meta_block_size: self.meta_block_size.unwrap_or(8192),
             compression: self.compression.and_then(|s| parse_compression(&s)),
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
-            max_queue_batch_size: self.max_queue_batch_size.unwrap_or(1000),
+            max_queue_batch_size: self.max_queue_batch_size.unwrap_or(5000),
         }
     }
 }
@@ -108,7 +116,11 @@ max_roaring_shard_size = 50000
 max_queue_batch_size = 2000
 block_cache_size = 67108864
 write_buffer_size = 16777216
-block_size = 65536
+roaring_inverted_block_size = 16384
+string_inverted_block_size = 65536
+docs_block_size = 8192
+queue_block_size = 32768
+meta_block_size = 8192
 maintenance_threads = 2
 compression = "lz4"
 log_level = "debug"
@@ -124,7 +136,11 @@ dumps_folder = "/data/dumps"
         assert_eq!(cfg.max_queue_batch_size, Some(2000));
         assert_eq!(cfg.block_cache_size, Some(67108864));
         assert_eq!(cfg.write_buffer_size, Some(16777216));
-        assert_eq!(cfg.block_size, Some(65536));
+        assert_eq!(cfg.roaring_inverted_block_size, Some(16384));
+        assert_eq!(cfg.string_inverted_block_size, Some(65536));
+        assert_eq!(cfg.docs_block_size, Some(8192));
+        assert_eq!(cfg.queue_block_size, Some(32768));
+        assert_eq!(cfg.meta_block_size, Some(8192));
         assert_eq!(cfg.maintenance_threads, Some(2));
         assert_eq!(cfg.compression.as_deref(), Some("lz4"));
         assert_eq!(cfg.log_level.as_deref(), Some("debug"));
@@ -182,10 +198,14 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.max_shard_size, 1000);
         assert_eq!(store_cfg.max_roaring_shard_size, 100_000);
         assert!(store_cfg.write_buffer_size.is_none());
-        assert!(store_cfg.block_size.is_none());
+        assert_eq!(store_cfg.roaring_inverted_block_size, 16384);
+        assert_eq!(store_cfg.string_inverted_block_size, 65536);
+        assert_eq!(store_cfg.docs_block_size, 8192);
+        assert_eq!(store_cfg.queue_block_size, 32768);
+        assert_eq!(store_cfg.meta_block_size, 8192);
         assert!(store_cfg.compression.is_none());
         assert_eq!(store_cfg.index_interval, Duration::from_millis(900));
-        assert_eq!(store_cfg.max_queue_batch_size, 1000);
+        assert_eq!(store_cfg.max_queue_batch_size, 5000);
     }
 
     #[test]
@@ -195,7 +215,11 @@ search_api_key = "custom-search-key"
             max_shard_size: Some(200),
             max_roaring_shard_size: Some(50_000),
             write_buffer_size: Some(8_000_000),
-            block_size: Some(65536),
+            roaring_inverted_block_size: Some(32768),
+            string_inverted_block_size: Some(131072),
+            docs_block_size: Some(16384),
+            queue_block_size: Some(65536),
+            meta_block_size: Some(4096),
             compression: Some("lz4".into()),
             index_interval_ms: Some(300),
             max_queue_batch_size: Some(500),
@@ -211,7 +235,11 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.max_shard_size, 200);
         assert_eq!(store_cfg.max_roaring_shard_size, 50_000);
         assert_eq!(store_cfg.write_buffer_size, Some(8_000_000));
-        assert_eq!(store_cfg.block_size, Some(65536));
+        assert_eq!(store_cfg.roaring_inverted_block_size, 32768);
+        assert_eq!(store_cfg.string_inverted_block_size, 131072);
+        assert_eq!(store_cfg.docs_block_size, 16384);
+        assert_eq!(store_cfg.queue_block_size, 65536);
+        assert_eq!(store_cfg.meta_block_size, 4096);
         assert_eq!(store_cfg.compression, Some(fjall::CompressionType::Lz4));
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
         assert_eq!(store_cfg.max_queue_batch_size, 500);
