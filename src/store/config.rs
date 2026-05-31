@@ -23,8 +23,6 @@ pub enum IdType {
 
 #[derive(Serialize, Deserialize, Clone, Archive, RkyvSerialize, RkyvDeserialize)]
 pub struct PostingShard {
-    pub first: String,
-    pub last: String,
     pub ids: Vec<String>,
 }
 
