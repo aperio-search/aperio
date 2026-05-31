@@ -176,8 +176,8 @@ impl Store {
         id_type: IdType,
     ) -> Result<fjall::Keyspace, AppError> {
         let block_size = match id_type {
-            IdType::Number => self.config.roaring_inverted_block_size,
-            IdType::String => self.config.string_inverted_block_size,
+            IdType::Number => self.config.inverted_roaring_block_size,
+            IdType::String => self.config.inverted_string_block_size,
         };
         let name = format!("{}.inverted", collection);
         Ok(self.db.keyspace(&name, || {
@@ -732,8 +732,8 @@ impl Store {
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
             let inv_block_size = match meta.id_type {
-                IdType::Number => self.config.roaring_inverted_block_size,
-                IdType::String => self.config.string_inverted_block_size,
+                IdType::Number => self.config.inverted_roaring_block_size,
+                IdType::String => self.config.inverted_string_block_size,
             };
             let inv = self.db.keyspace(&inv_name, || {
                 self.config
@@ -871,8 +871,8 @@ mod tests {
         assert_eq!(cfg.max_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
         assert!(cfg.write_buffer_size.is_none());
-        assert_eq!(cfg.roaring_inverted_block_size, 16384);
-        assert_eq!(cfg.string_inverted_block_size, 65536);
+        assert_eq!(cfg.inverted_roaring_block_size, 16384);
+        assert_eq!(cfg.inverted_string_block_size, 65536);
         assert_eq!(cfg.docs_block_size, 8192);
         assert_eq!(cfg.queue_block_size, 32768);
         assert_eq!(cfg.meta_block_size, 8192);
