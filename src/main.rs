@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use aperio::{auth::AuthConfig, config::AppConfig, routes, store::Store};
 use tracing_subscriber::EnvFilter;
 
