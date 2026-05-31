@@ -158,33 +158,6 @@ async fn search_key_can_search() {
 }
 
 #[tokio::test]
-async fn search_key_can_suggest() {
-    let (app, _dir) = test_app();
-
-    let req = json_request(
-        Method::POST,
-        "/collections",
-        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
-    );
-    send(&app, req).await;
-
-    let req = json_request(
-        Method::POST,
-        "/collections/docs/items",
-        json!({"id": "1", "content": "hello world"}),
-    );
-    send(&app, req).await;
-
-    let (_status, body) = send(&app, search_key_get("/collections/docs/suggest?q=hel")).await;
-    assert!(
-        body["suggestions"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("hello"))
-    );
-}
-
-#[tokio::test]
 async fn search_key_cannot_admin() {
     let (app, _dir) = test_app();
 
@@ -391,33 +364,6 @@ async fn search_sort_desc() {
     assert_eq!(
         body["results"],
         json!([{"id": "b", "content": "hello"}, {"id": "a", "content": "hello"}])
-    );
-}
-
-#[tokio::test]
-async fn suggest_endpoint() {
-    let (app, _dir) = test_app();
-
-    let req = json_request(
-        Method::POST,
-        "/collections",
-        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
-    );
-    send(&app, req).await;
-
-    let req = json_request(
-        Method::POST,
-        "/collections/docs/items",
-        json!({"id": "1", "content": "hello world"}),
-    );
-    send(&app, req).await;
-
-    let (_status, body) = send(&app, get_request("/collections/docs/suggest?q=hel")).await;
-    assert!(
-        body["suggestions"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("hello"))
     );
 }
 

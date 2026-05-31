@@ -45,14 +45,6 @@ export interface SearchResponse {
 	elapsedMs: number;
 }
 
-export interface SuggestParams {
-	q: string;
-}
-
-export interface SuggestResponse {
-	suggestions: string[];
-}
-
 export interface ExportResponse {
 	ok: boolean;
 	size: number;

@@ -69,9 +69,6 @@ fn full_string_workflow() {
         .unwrap();
     assert_eq!(ids(&intersection), vec!["id1", "id3"]);
 
-    let suggest = store.suggest("docs", "br").unwrap();
-    assert!(suggest.contains(&"brown".to_string()));
-
     store.delete_item("docs", "id1").unwrap();
     let after_delete = store.search("docs", "fox", false, 10, None).unwrap();
     assert_eq!(ids(&after_delete), vec!["id3"]);
@@ -241,27 +238,6 @@ fn search_pagination_edge_cases() {
         )
         .unwrap();
     assert!(page4.is_empty());
-}
-
-#[test]
-fn suggest_deduplicates_and_limit() {
-    let (store, _dir) = create_store();
-    store
-        .create_collection("docs", "string", &["content".into()])
-        .unwrap();
-
-    for i in 0..20u64 {
-        store
-            .upsert(
-                "docs",
-                json!({"id": i.to_string(), "content": "apple banana cherry"}),
-            )
-            .unwrap();
-    }
-
-    let suggestions = store.suggest("docs", "app").unwrap();
-    assert_eq!(suggestions.len(), 1);
-    assert_eq!(suggestions[0], "apple");
 }
 
 #[test]

@@ -33,9 +33,6 @@ await client.upsertItem("movies", { id: "3", title: "return of the jedi" });
 // Search
 const { results } = await client.search("movies", { q: "star" });
 
-// Autocomplete
-const { suggestions } = await client.suggest("movies", { q: "emp" });
-
 // Delete
 await client.deleteItem("movies", "1");
 await client.deleteCollection("movies");
@@ -64,7 +61,6 @@ await client.deleteCollection("movies");
 | Method | Description |
 |--------|-------------|
 | `search(collection, params)` | Full-text search with pagination |
-| `suggest(collection, params)` | Autocomplete suggestions |
 
 ### Backup
 

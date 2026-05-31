@@ -34,7 +34,7 @@ log_level = "info"                     # trace, debug, info, warn, error
 index_interval_ms = 900                # ms between index queue flushes
 max_queue_batch_size = 1000            # items processed per background tick
 main_api_key = "my-secret-key"         # main API key (full access)
-search_api_key = "my-search-key"       # search-only API key (search & suggest only)
+search_api_key = "my-search-key"       # search-only API key (search endpoint only)
 dumps_folder = "/data/dumps"           # backup snapshot directory
 ```
 
@@ -50,7 +50,7 @@ dumps_folder = "/data/dumps"           # backup snapshot directory
 | `maintenance_threads` | `integer` | `min(# CPUs, 4)` | Number of background worker threads for compaction, flush, and journal maintenance |
 | `compression` | `string` | `"none"` (fjall default) | Data block compression algorithm: `"none"` or `"lz4"` |
 | `roaring_inverted_block_size` | `integer` (bytes) | `16384` (16 KiB) | Data block size for `{collection}.inverted` keyspaces of **number**-type collections (RoaringTreemap bitmaps). Small blocks favour point lookups during search |
-| `string_inverted_block_size` | `integer` (bytes) | `65536` (64 KiB) | Data block size for `{collection}.inverted` keyspaces of **string**-type collections (rkyv-archived shards). Larger blocks improve prefix-scan throughput for suggest |
+| `string_inverted_block_size` | `integer` (bytes) | `65536` (64 KiB) | Data block size for `{collection}.inverted` keyspaces of **string**-type collections (rkyv-archived shards) |
 | `docs_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `{collection}.docs` keyspaces (stored documents). Larger blocks improve range-scan throughput |
 | `queue_block_size` | `integer` (bytes) | `32768` (32 KiB) | Data block size for `_index_queue` keyspace. Larger blocks reduce write amplification for sequential append |
 | `meta_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `_collections` keyspace (system metadata). Small blocks favour point lookups |
@@ -58,5 +58,5 @@ dumps_folder = "/data/dumps"           # backup snapshot directory
 | `index_interval_ms` | `integer` | `900` | Interval in milliseconds between background index queue flushes. Lower values reduce write-to-search latency; higher values batch more work per flush |
 | `max_queue_batch_size` | `integer` | `1000` | Maximum items to pull from the index queue per background tick. Lower values reduce per-tick memory usage during bulk ingestion; higher values drain the queue faster |
 | `main_api_key` | `string` | `SecretApiKey` | Main API key with full access to all endpoints. Overridden by the `MAIN_API_KEY` environment variable if set |
-| `search_api_key` | `string` | `PublicApiKey` | Search-only API key for `search` and `suggest` endpoints. Overridden by the `SEARCH_API_KEY` environment variable if set |
+| `search_api_key` | `string` | `PublicApiKey` | Search-only API key for `search` endpoint. Overridden by the `SEARCH_API_KEY` environment variable if set |
 | `dumps_folder` | `string` | *(unset)* | Directory where backup snapshots are written to and read from. If not set, `/backup/export` and `/backup/import` return a `400` error. Must be an absolute or relative path writable by the server process |

@@ -99,22 +99,6 @@ mod tests {
     }
 
     #[test]
-    fn suggest_params_deserialize() {
-        let json = r#"{"q":"hel"}"#;
-        let params: SuggestParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.q, "hel");
-    }
-
-    #[test]
-    fn suggest_response_serialize() {
-        let resp = SuggestResponse {
-            suggestions: vec!["hello".into(), "help".into()],
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(json, r#"{"suggestions":["hello","help"]}"#);
-    }
-
-    #[test]
     fn create_collection_request_fields_default() {
         let json = r#"{"name":"mycol","id_type":"string","searchable_fields":[]}"#;
         let req: CreateCollectionRequest = serde_json::from_str(json).unwrap();
@@ -152,16 +136,6 @@ pub struct SearchResponse {
     pub results: Vec<serde_json::Value>,
     pub take: usize,
     pub elapsed_ms: f64,
-}
-
-#[derive(Deserialize)]
-pub struct SuggestParams {
-    pub q: String,
-}
-
-#[derive(Serialize)]
-pub struct SuggestResponse {
-    pub suggestions: Vec<String>,
 }
 
 #[derive(Serialize)]

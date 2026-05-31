@@ -13,7 +13,6 @@ use crate::error::AppError;
 use crate::models::{
     BackupFile, CollectionCreated, CollectionInfo, CreateCollectionRequest, ExportResponse,
     ImportResponse, ListCollectionsResponse, SearchParams, SearchResponse, StatusResponse,
-    SuggestParams, SuggestResponse,
 };
 use crate::store::Store;
 
@@ -31,7 +30,6 @@ fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
         )
         .route("/collections/{collection}/items", post(upsert_item))
         .route("/collections/{collection}/search", get(search))
-        .route("/collections/{collection}/suggest", get(suggest))
         .route("/collections/{collection}/items/{id}", delete(delete_item))
         .route("/collections/{collection}", get(collection_info))
         .route("/collections/{collection}", delete(delete_collection))
@@ -129,19 +127,6 @@ async fn search(
         take,
         elapsed_ms,
     }))
-}
-
-async fn suggest(
-    State(state): State<Arc<AppState>>,
-    Path(collection): Path<String>,
-    Query(params): Query<SuggestParams>,
-) -> Result<Json<SuggestResponse>, AppError> {
-    let store = Arc::clone(&state.store);
-    let q = params.q;
-    let suggestions = tokio::task::spawn_blocking(move || store.suggest(&collection, &q))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
-    Ok(Json(SuggestResponse { suggestions }))
 }
 
 async fn delete_item(

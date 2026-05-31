@@ -2,7 +2,7 @@
 
 Complete list of all Aperio HTTP endpoints.
 
-> **Authentication**: All endpoints require an `Authorization: <key>` header, except `GET /status` which is public. Use the **main API key** for full access, or the **search API key** for `search` and `suggest` endpoints only. See [Environment Variables](/environment-variables) for configuration.
+> **Authentication**: All endpoints require an `Authorization: <key>` header, except `GET /status` which is public. Use the **main API key** for full access, or the **search API key** for `search` endpoint only. See [Environment Variables](/environment-variables) for configuration.
 
 ## Status
 
@@ -31,7 +31,6 @@ Complete list of all Aperio HTTP endpoints.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/collections/{collection}/search` | Search documents matching a query |
-| `GET` | `/collections/{collection}/suggest` | Autocomplete suggestions for a prefix |
 
 ## Backup
 

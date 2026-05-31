@@ -27,7 +27,6 @@ Aperio is an screamingly fast, ultra-lean search engine built on top of [fjall](
 
 - **Screamingly Fast**: Engineered for performance, delivering ultra-low latency search results.
 - **Low RAM Footprint**: Highly resource-efficient, keeping memory usage minimal even with massive datasets.
-- **Autocomplete**: Built-in autocomplete endpoint to provide real-time suggestions as users type.
 - **Full Unicode Support**: Built-in normalization and encoding compatibility to handle global data flawlessly.
 - **DevOps-Free**: Easy to deploy, configure, and maintain without needing dedicated DevOps expertise.
 
@@ -53,7 +52,7 @@ docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" aperio
 │                   HTTP (port 3000)                │
 ├───────────────────────────────────────────────────┤
 │          Axum Router (src/routes.rs)              │
-│     /collections  /search  /suggest  /items       │
+│     /collections  /search  /items                 │
 ├───────────────────────────────────────────────────┤
 │            Store Engine (src/store.rs)            │
 │  Inverted Index  ·  Tokenization  ·  ID Strategy  │
@@ -84,7 +83,6 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `POST` | `/collections/{name}/items` | Upsert document |
 | `DELETE` | `/collections/{name}/items/{id}` | Delete document |
 | `GET` | `/collections/{name}/search?q=...` | Search documents |
-| `GET` | `/collections/{name}/suggest?q=...` | Autocomplete |
 
 ### Store Engine (`src/store.rs`)
 
@@ -110,8 +108,6 @@ Tokens are deduplicated into a `HashSet<String>` before indexing.
 #### Inverted Index
 
 Each collection has an inverted index stored in a dedicated fjall keyspace (`{name}.inverted`). For every unique token (word), posting lists map to document IDs.
-
-**Word markers** — an empty key (`word` → empty bytes) signals that a word exists in the index, enabling fast prefix scans for autocomplete.
 
 #### Two ID Strategies
 

@@ -98,8 +98,6 @@ pub fn add_to_posting_list(
     id: &str,
     max_shard_size: usize,
 ) -> Result<(), AppError> {
-    batch.insert(inverted, word.as_bytes(), []);
-
     let indices = list_shard_indices(inverted, word)?;
 
     if indices.is_empty() {
@@ -221,8 +219,6 @@ pub fn add_to_roaring_posting_list(
     id: u64,
     max_roaring_shard_size: u64,
 ) -> Result<(), AppError> {
-    batch.insert(inverted, word.as_bytes(), []);
-
     let indices = list_shard_indices(inverted, word)?;
 
     if indices.is_empty() {

@@ -119,7 +119,9 @@ impl Store {
     pub fn with_config(db: fjall::Database, config: StoreConfig) -> Self {
         let collections = {
             let mut map = HashMap::new();
-            if let Ok(meta) = db.keyspace("_collections", || config.keyspace_opts(config.meta_block_size)) {
+            if let Ok(meta) = db.keyspace("_collections", || {
+                config.keyspace_opts(config.meta_block_size)
+            }) {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
                         let name = String::from_utf8_lossy(&key).to_string();
@@ -144,7 +146,9 @@ impl Store {
     }
 
     fn init_next_seq(db: &fjall::Database, config: &StoreConfig) -> u64 {
-        let queue = match db.keyspace("_index_queue", || config.keyspace_opts(config.queue_block_size)) {
+        let queue = match db.keyspace("_index_queue", || {
+            config.keyspace_opts(config.queue_block_size)
+        }) {
             Ok(q) => q,
             Err(_) => return 1,
         };
@@ -164,30 +168,38 @@ impl Store {
         max + 1
     }
 
-    fn inverted_keyspace(&self, collection: &str, id_type: IdType) -> Result<fjall::Keyspace, AppError> {
+    fn inverted_keyspace(
+        &self,
+        collection: &str,
+        id_type: IdType,
+    ) -> Result<fjall::Keyspace, AppError> {
         let block_size = match id_type {
             IdType::Number => self.config.roaring_inverted_block_size,
             IdType::String => self.config.string_inverted_block_size,
         };
         let name = format!("{}.inverted", collection);
-        Ok(self.db.keyspace(&name, || self.config.keyspace_opts(block_size))?)
+        Ok(self
+            .db
+            .keyspace(&name, || self.config.keyspace_opts(block_size))?)
     }
 
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.docs", collection);
-        Ok(self.db.keyspace(&name, || self.config.keyspace_opts(self.config.docs_block_size))?)
+        Ok(self.db.keyspace(&name, || {
+            self.config.keyspace_opts(self.config.docs_block_size)
+        })?)
     }
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
-        Ok(self
-            .db
-            .keyspace("_collections", || self.config.keyspace_opts(self.config.meta_block_size))?)
+        Ok(self.db.keyspace("_collections", || {
+            self.config.keyspace_opts(self.config.meta_block_size)
+        })?)
     }
 
     fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
-        Ok(self
-            .db
-            .keyspace("_index_queue", || self.config.keyspace_opts(self.config.queue_block_size))?)
+        Ok(self.db.keyspace("_index_queue", || {
+            self.config.keyspace_opts(self.config.queue_block_size)
+        })?)
     }
 
     fn allocate_seq(&self) -> u64 {
@@ -470,31 +482,6 @@ impl Store {
         Ok(results)
     }
 
-    pub fn suggest(&self, collection: &str, prefix: &str) -> Result<Vec<String>, AppError> {
-        let meta = self.validate_collection_exists(collection)?;
-        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
-        let last_word = prefix.split_whitespace().last().unwrap_or(prefix);
-        let normalized = last_word
-            .tokenize()
-            .find(|t| t.is_word())
-            .map(|t| t.lemma().to_string())
-            .unwrap_or_else(|| last_word.to_lowercase());
-        let mut seen = HashSet::new();
-        let results: Vec<String> = inverted
-            .prefix(normalized.as_bytes())
-            .take(50)
-            .filter_map(|guard| guard.into_inner().ok())
-            .map(|(key, _)| {
-                let s = String::from_utf8(key.to_vec()).unwrap_or_default();
-                s.split(SHARD_DELIM).next().unwrap_or(&s).to_string()
-            })
-            .filter(|w| seen.insert(w.clone()))
-            .take(10)
-            .collect();
-        tracing::debug!(collection = %collection, normalized = %normalized, results = results.len(), "suggest completed");
-        Ok(results)
-    }
-
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
         if self.background_active.load(Ordering::Acquire) {
             self.process_pending_queue()?;
@@ -612,9 +599,9 @@ impl Store {
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
-            let docs = self
-                .db
-                .keyspace(&docs_name, || self.config.keyspace_opts(self.config.docs_block_size))?;
+            let docs = self.db.keyspace(&docs_name, || {
+                self.config.keyspace_opts(self.config.docs_block_size)
+            })?;
             self.db.delete_keyspace(docs)?;
         }
 
@@ -1019,43 +1006,6 @@ mod tests {
             .unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
-    }
-
-    #[test]
-    fn suggest_basic() {
-        let (store, _dir) = default_store();
-        store
-            .create_collection("docs", "string", &["content".into()])
-            .unwrap();
-        store
-            .upsert("docs", json!({"id": "1", "content": "hello world"}))
-            .unwrap();
-        store
-            .upsert("docs", json!({"id": "2", "content": "helpful tips"}))
-            .unwrap();
-        let suggestions = store.suggest("docs", "hel").unwrap();
-        assert!(suggestions.contains(&"helpful".to_string()));
-        assert!(suggestions.contains(&"hello".to_string()));
-    }
-
-    #[test]
-    fn suggest_no_matches() {
-        let (store, _dir) = default_store();
-        store
-            .create_collection("docs", "string", &["content".into()])
-            .unwrap();
-        store
-            .upsert("docs", json!({"id": "1", "content": "hello world"}))
-            .unwrap();
-        let suggestions = store.suggest("docs", "xyz").unwrap();
-        assert!(suggestions.is_empty());
-    }
-
-    #[test]
-    fn suggest_on_nonexistent_collection() {
-        let (store, _dir) = default_store();
-        let err = store.suggest("nonexistent", "hel").unwrap_err();
-        assert!(matches!(err, AppError::NotFound(_)));
     }
 
     #[test]
