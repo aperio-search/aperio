@@ -34,26 +34,15 @@ impl AppConfig {
             Some(p) => p,
             None => return Self::default(),
         };
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to read config file '{}': {e}",
-                    path.display()
-                );
-                return Self::default();
-            }
-        };
-        match toml::from_str(&content) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to parse config file '{}': {e}",
-                    path.display()
-                );
-                Self::default()
-            }
-        }
+        let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("failed to read config file '{}': {e}", path.display());
+        });
+        toml::from_str(&content).unwrap_or_else(|e| {
+            panic!(
+                "failed to parse config file '{}': {e}",
+                path.display()
+            );
+        })
     }
 
     pub fn merge_into_store_config(self) -> StoreConfig {
@@ -98,9 +87,9 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "failed to read config file")]
     fn load_invalid_path() {
-        let cfg = AppConfig::load(Some(std::path::Path::new("/nonexistent/config.toml")));
-        assert!(cfg.min_token_length.is_none());
+        AppConfig::load(Some(std::path::Path::new("/nonexistent/config.toml")));
     }
 
     #[test]
@@ -183,12 +172,12 @@ search_api_key = "custom-search-key"
     }
 
     #[test]
+    #[should_panic(expected = "failed to parse config file")]
     fn load_invalid_toml() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "not valid toml {{{").unwrap();
-        let cfg = AppConfig::load(Some(&path));
-        assert!(cfg.min_token_length.is_none());
+        AppConfig::load(Some(&path));
     }
 
     #[test]

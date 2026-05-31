@@ -60,16 +60,6 @@ async fn main() {
     if let Some(key) = search_api_key.filter(|k| !k.is_empty()) {
         auth.search_api_key = key;
     }
-    if let Ok(key) = std::env::var("MAIN_API_KEY")
-        && !key.is_empty()
-    {
-        auth.main_api_key = key;
-    }
-    if let Ok(key) = std::env::var("SEARCH_API_KEY")
-        && !key.is_empty()
-    {
-        auth.search_api_key = key;
-    }
     let app = routes::create_router(store, auth, dumps_folder);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
