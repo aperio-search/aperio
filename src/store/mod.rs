@@ -178,9 +178,10 @@ impl Store {
             IdType::String => self.config.string_inverted_block_size,
         };
         let name = format!("{}.inverted", collection);
-        Ok(self
-            .db
-            .keyspace(&name, || self.config.keyspace_opts(block_size, self.config.inverted_hash_ratio))?)
+        Ok(self.db.keyspace(&name, || {
+            self.config
+                .keyspace_opts(block_size, self.config.inverted_hash_ratio)
+        })?)
     }
 
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
@@ -193,15 +194,13 @@ impl Store {
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self.db.keyspace("_collections", || {
-            self.config
-                .keyspace_opts(self.config.meta_block_size, 0.0)
+            self.config.keyspace_opts(self.config.meta_block_size, 0.0)
         })?)
     }
 
     fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self.db.keyspace("_index_queue", || {
-            self.config
-                .keyspace_opts(self.config.queue_block_size, 0.0)
+            self.config.keyspace_opts(self.config.queue_block_size, 0.0)
         })?)
     }
 
@@ -595,15 +594,17 @@ impl Store {
                 IdType::Number => self.config.roaring_inverted_block_size,
                 IdType::String => self.config.string_inverted_block_size,
             };
-            let inv = self
-                .db
-                .keyspace(&inv_name, || self.config.keyspace_opts(inv_block_size, self.config.inverted_hash_ratio))?;
+            let inv = self.db.keyspace(&inv_name, || {
+                self.config
+                    .keyspace_opts(inv_block_size, self.config.inverted_hash_ratio)
+            })?;
             self.db.delete_keyspace(inv)?;
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
             let docs = self.db.keyspace(&docs_name, || {
-                self.config.keyspace_opts(self.config.docs_block_size, self.config.docs_hash_ratio)
+                self.config
+                    .keyspace_opts(self.config.docs_block_size, self.config.docs_hash_ratio)
             })?;
             self.db.delete_keyspace(docs)?;
         }
