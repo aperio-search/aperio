@@ -37,7 +37,7 @@ cargo run --release      # optimized build
 
 ## Setup
 
-- Rust toolchain: pinned via `rust-toolchain.toml` to channel `1.95`
+- Rust toolchain: pinned via `rust-toolchain.toml` to channel `1.96`
 - Edition 2024
 
 ## Runtime
