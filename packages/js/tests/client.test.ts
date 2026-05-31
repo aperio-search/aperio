@@ -249,24 +249,6 @@ describe("AperioClient", () => {
 		});
 	});
 
-	describe("suggest", () => {
-		it("returns suggestions", async () => {
-			const body = { suggestions: ["apple", "application"] };
-
-			globalThis.fetch = mock.fn(() =>
-				Promise.resolve({
-					ok: true,
-					status: 200,
-					text: () => Promise.resolve(JSON.stringify(body)),
-					json: () => Promise.resolve(body),
-				}),
-			);
-
-			const result = await client.suggest("posts", { q: "app" });
-			assert.deepStrictEqual(result.suggestions, ["apple", "application"]);
-		});
-	});
-
 	describe("error handling", () => {
 		it("throws AperioError on 4xx", async () => {
 			globalThis.fetch = mock.fn(() =>

@@ -12,7 +12,7 @@ Treat this page as a **narrative companion** for developers who enjoy reading ab
 │                   HTTP (port 3000)                │
 ├───────────────────────────────────────────────────┤
 │          Axum Router (src/routes.rs)              │
-│     /collections  /search  /suggest  /items       │
+│         /collections  /search  /items             │
 ├───────────────────────────────────────────────────┤
 │            Store Engine (src/store.rs)            │
 │  Inverted Index  ·  Tokenization  ·  ID Strategy  │
@@ -43,7 +43,6 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `POST` | `/collections/{name}/items` | Upsert document |
 | `DELETE` | `/collections/{name}/items/{id}` | Delete document |
 | `GET` | `/collections/{name}/search?q=...` | Search documents |
-| `GET` | `/collections/{name}/suggest?q=...` | Autocomplete |
 | `POST` | `/backup/export` | Export database snapshot to a file in the dumps folder |
 | `POST` | `/backup/import` | Import a snapshot from the dumps folder |
 
@@ -71,8 +70,6 @@ Tokens are deduplicated into a `HashSet<String>` before indexing.
 ### Inverted Index
 
 Each collection has an inverted index stored in a dedicated fjall keyspace (`{name}.inverted`). For every unique token (word), posting lists map to document IDs.
-
-**Word markers** — an empty key (`word` → empty bytes) signals that a word exists in the index, enabling fast prefix scans for autocomplete.
 
 ### Two ID Strategies
 

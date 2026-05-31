@@ -49,8 +49,6 @@ await client.upsertItem("movies", { id: "2", title: "star wars a new hope" });
 await client.upsertItem("movies", { id: "3", title: "return of the jedi" });
 
 const results = await client.search("movies", { q: "star" });
-
-const suggestions = await client.suggest("movies", { q: "emp" });
 ```
 
 ```js [Fetch]
@@ -83,12 +81,6 @@ const res = await fetch("http://localhost:3000/collections/movies/search?q=star"
   headers: { Authorization: "PublicApiKey" },
 });
 const movies = await res.json();
-
-// Autocomplete "emp"
-const sugRes = await fetch("http://localhost:3000/collections/movies/suggest?q=emp", {
-  headers: { Authorization: "PublicApiKey" },
-});
-const suggestions = await sugRes.json();
 ```
 
 ```sh [cURL]
@@ -116,9 +108,5 @@ curl -X POST http://localhost:3000/collections/movies/items \
 
 # Search for "star" — returns the full matching document(s)
 curl "http://localhost:3000/collections/movies/search?q=star" \
-  -H "Authorization: PublicApiKey"
-
-# Autocomplete "emp" — returns "empire"
-curl "http://localhost:3000/collections/movies/suggest?q=emp" \
   -H "Authorization: PublicApiKey"
 ```
