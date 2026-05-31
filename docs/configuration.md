@@ -30,7 +30,8 @@ maintenance_threads = 4
 inverted_write_buffer_size = 67108864  # 64 MiB
 docs_buffer_size = 67108864            # 64 MiB
 index_queue_buffer_size = 67108864     # 64 MiB
-inverted_hash_ratio = 8.0
+inverted_string_hash_ratio = 8.0
+inverted_roaring_hash_ratio = 8.0
 docs_hash_ratio = 8.0
 inverted_roaring_block_size = 16384    # 16 KiB
 inverted_string_block_size = 65536     # 64 KiB
@@ -95,7 +96,8 @@ Hash index ratio for prefix bloom filters. Higher values give more buckets per k
 
 | Field | Type | Default | Applies To |
 |---|---|---|---|
-| `inverted_hash_ratio` | `float` | `8.0` | `{collection}.inverted` |
+| `inverted_string_hash_ratio` | `float` | `8.0` | `{collection}.inverted` for string-ID collections |
+| `inverted_roaring_hash_ratio` | `float` | `8.0` | `{collection}.inverted` for number-ID collections |
 | `docs_hash_ratio` | `float` | `8.0` | `{collection}.docs` |
 
 ### Data Block Sizes

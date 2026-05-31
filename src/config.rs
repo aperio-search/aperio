@@ -26,7 +26,8 @@ pub struct AppConfig {
     pub inverted_roaring_compression: Option<String>,
     pub index_queue_compression: Option<String>,
     pub collections_compression: Option<String>,
-    pub inverted_hash_ratio: Option<f32>,
+    pub inverted_string_hash_ratio: Option<f32>,
+    pub inverted_roaring_hash_ratio: Option<f32>,
     pub docs_hash_ratio: Option<f32>,
     pub log_level: Option<String>,
     pub index_interval_ms: Option<u64>,
@@ -76,7 +77,8 @@ impl AppConfig {
             collections_compression: self
                 .collections_compression
                 .and_then(|s| parse_compression(&s)),
-            inverted_hash_ratio: self.inverted_hash_ratio.unwrap_or(8.0),
+            inverted_string_hash_ratio: self.inverted_string_hash_ratio.unwrap_or(8.0),
+            inverted_roaring_hash_ratio: self.inverted_roaring_hash_ratio.unwrap_or(8.0),
             docs_hash_ratio: self.docs_hash_ratio.unwrap_or(8.0),
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
             max_queue_batch_size: self.max_queue_batch_size.unwrap_or(5000),
@@ -229,7 +231,8 @@ search_api_key = "custom-search-key"
         assert!(store_cfg.inverted_roaring_compression.is_none());
         assert!(store_cfg.index_queue_compression.is_none());
         assert!(store_cfg.collections_compression.is_none());
-        assert_eq!(store_cfg.inverted_hash_ratio, 8.0);
+        assert_eq!(store_cfg.inverted_string_hash_ratio, 8.0);
+        assert_eq!(store_cfg.inverted_roaring_hash_ratio, 8.0);
         assert_eq!(store_cfg.docs_hash_ratio, 8.0);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(900));
         assert_eq!(store_cfg.max_queue_batch_size, 5000);
@@ -254,7 +257,8 @@ search_api_key = "custom-search-key"
             inverted_roaring_compression: Some("lz4".into()),
             index_queue_compression: Some("none".into()),
             collections_compression: None,
-            inverted_hash_ratio: Some(4.0),
+            inverted_string_hash_ratio: Some(4.0),
+            inverted_roaring_hash_ratio: None,
             docs_hash_ratio: None,
             index_interval_ms: Some(300),
             max_queue_batch_size: Some(500),
@@ -291,7 +295,8 @@ search_api_key = "custom-search-key"
         );
         assert!(store_cfg.inverted_string_compression.is_none());
         assert!(store_cfg.collections_compression.is_none());
-        assert_eq!(store_cfg.inverted_hash_ratio, 4.0);
+        assert_eq!(store_cfg.inverted_string_hash_ratio, 4.0);
+        assert_eq!(store_cfg.inverted_roaring_hash_ratio, 8.0);
         assert_eq!(store_cfg.docs_hash_ratio, 8.0);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
         assert_eq!(store_cfg.max_queue_batch_size, 500);
