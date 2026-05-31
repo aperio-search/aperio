@@ -418,8 +418,7 @@ impl Store {
                             Some(meta) => {
                                 let content =
                                     extract_searchable_content(&doc, &meta.searchable_fields);
-                                let new_words =
-                                    tokenize(&content, self.config.min_token_length);
+                                let new_words = tokenize(&content, self.config.min_token_length);
                                 let old_words = {
                                     let docs_result = self.db.keyspace(
                                         &format!("{}.docs", entry.collection),
@@ -431,9 +430,7 @@ impl Store {
                                         },
                                     );
                                     match docs_result {
-                                        Ok(docs_ks) => match docs_ks
-                                            .get(entry.id.as_bytes())
-                                        {
+                                        Ok(docs_ks) => match docs_ks.get(entry.id.as_bytes()) {
                                             Ok(Some(old_data)) => {
                                                 match serde_json::from_slice(&old_data) {
                                                     Ok(old_doc) => {
@@ -511,24 +508,15 @@ impl Store {
                 match meta.id_type {
                     IdType::Number => {
                         let id_u64 = pp.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!(
-                                "invalid numeric id in storage: {}",
-                                pp.id
-                            ))
+                            AppError::Internal(format!("invalid numeric id in storage: {}", pp.id))
                         })?;
                         posting_list::remove_from_roaring_posting_list(
-                            &mut batch,
-                            &inverted,
-                            word,
-                            id_u64,
+                            &mut batch, &inverted, word, id_u64,
                         )?;
                     }
                     IdType::String => {
                         posting_list::remove_from_posting_list(
-                            &mut batch,
-                            &inverted,
-                            word,
-                            &pp.id,
+                            &mut batch, &inverted, word, &pp.id,
                         )?;
                     }
                 }
@@ -538,10 +526,7 @@ impl Store {
                 match meta.id_type {
                     IdType::Number => {
                         let id_u64 = pp.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!(
-                                "invalid numeric id in storage: {}",
-                                pp.id
-                            ))
+                            AppError::Internal(format!("invalid numeric id in storage: {}", pp.id))
                         })?;
                         posting_list::add_to_roaring_posting_list(
                             &mut batch,
