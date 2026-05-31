@@ -36,6 +36,7 @@ async function createCollection() {
     });
     console.log("Collection verified/ready.");
   } catch (error) {
+    console.error(error);
     if (error.status === 409) {
       console.log("Collection already exists. Moving to indexing...");
     } else if (error.status === 401) {
