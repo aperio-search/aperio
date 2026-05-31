@@ -4,7 +4,7 @@ Thank you for your interest in contributing! This document covers the workflow a
 
 ## Getting Started
 
-- **Rust toolchain:** pinned to `1.95` via `rust-toolchain.toml` — it will be installed automatically by rustup.
+- **Rust toolchain:** pinned to `1.96` via `rust-toolchain.toml` — it will be installed automatically by rustup.
 - **No external services.** Aperio runs entirely locally with `fjall` for storage. Just clone and build.
 
 ```sh
