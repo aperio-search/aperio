@@ -185,13 +185,15 @@ impl Store {
         collection: &str,
         id_type: IdType,
     ) -> Result<fjall::Keyspace, AppError> {
-        let (block_size, compression) = match id_type {
+        let (block_size, hash_ratio, compression) = match id_type {
             IdType::Number => (
                 self.config.inverted_roaring_block_size,
+                self.config.inverted_roaring_hash_ratio,
                 self.config.inverted_roaring_compression,
             ),
             IdType::String => (
                 self.config.inverted_string_block_size,
+                self.config.inverted_string_hash_ratio,
                 self.config.inverted_string_compression,
             ),
         };
@@ -199,7 +201,7 @@ impl Store {
         Ok(self.db.keyspace(&name, || {
             self.config.keyspace_opts(
                 block_size,
-                self.config.inverted_hash_ratio,
+                hash_ratio,
                 self.config.inverted_write_buffer_size,
                 compression,
             )
@@ -767,20 +769,22 @@ impl Store {
 
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
-            let (inv_block_size, inv_compression) = match meta.id_type {
+            let (inv_block_size, inv_hash_ratio, inv_compression) = match meta.id_type {
                 IdType::Number => (
                     self.config.inverted_roaring_block_size,
+                    self.config.inverted_roaring_hash_ratio,
                     self.config.inverted_roaring_compression,
                 ),
                 IdType::String => (
                     self.config.inverted_string_block_size,
+                    self.config.inverted_string_hash_ratio,
                     self.config.inverted_string_compression,
                 ),
             };
             let inv = self.db.keyspace(&inv_name, || {
                 self.config.keyspace_opts(
                     inv_block_size,
-                    self.config.inverted_hash_ratio,
+                    inv_hash_ratio,
                     self.config.inverted_write_buffer_size,
                     inv_compression,
                 )
@@ -933,7 +937,8 @@ mod tests {
         assert!(cfg.inverted_roaring_compression.is_none());
         assert!(cfg.index_queue_compression.is_none());
         assert!(cfg.collections_compression.is_none());
-        assert_eq!(cfg.inverted_hash_ratio, 8.0);
+        assert_eq!(cfg.inverted_string_hash_ratio, 8.0);
+        assert_eq!(cfg.inverted_roaring_hash_ratio, 8.0);
         assert_eq!(cfg.docs_hash_ratio, 8.0);
     }
 
