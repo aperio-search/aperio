@@ -727,10 +727,11 @@ mod tests {
     #[test]
     fn store_config_defaults() {
         let cfg = StoreConfig::default();
-        assert_eq!(cfg.min_token_length, 2);
+        assert_eq!(cfg.min_token_length, 3);
         assert_eq!(cfg.max_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
         assert!(cfg.write_buffer_size.is_none());
+        assert!(cfg.block_size.is_none());
         assert!(cfg.compression.is_none());
     }
 
