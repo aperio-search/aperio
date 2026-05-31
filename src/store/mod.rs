@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
+use rayon::prelude::*;
+
 use charabia::Tokenize;
 use roaring::RoaringTreemap;
 
@@ -389,21 +391,180 @@ impl Store {
             return Ok(());
         }
 
-        let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), items.len() * 16);
+        // Phase 1: Parallel tokenization (CPU-bound, independent)
+        struct PreprocessedItem {
+            key: Vec<u8>,
+            collection: String,
+            id: String,
+            new_words: HashSet<String>,
+            old_words: HashSet<String>,
+            meta: Option<config::CollectionMeta>,
+            doc_bytes: Vec<u8>,
+        }
 
-        for (key, entry) in &items {
-            if let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&entry.document)
-                && let Err(e) =
-                    self.upsert_apply_batch(&entry.collection, &entry.id, &doc, &mut batch)
-            {
+        let preprocessed: Vec<PreprocessedItem> = items
+            .par_iter()
+            .map(|(key, entry)| {
+                let doc = serde_json::from_slice::<serde_json::Value>(&entry.document);
+                match doc {
+                    Ok(doc) => {
+                        let meta = self
+                            .collections
+                            .read()
+                            .unwrap()
+                            .get(&entry.collection)
+                            .cloned();
+                        match meta {
+                            Some(meta) => {
+                                let content =
+                                    extract_searchable_content(&doc, &meta.searchable_fields);
+                                let new_words =
+                                    tokenize(&content, self.config.min_token_length);
+                                let old_words = {
+                                    let docs_result = self.db.keyspace(
+                                        &format!("{}.docs", entry.collection),
+                                        || {
+                                            self.config.keyspace_opts(
+                                                self.config.docs_block_size,
+                                                self.config.docs_hash_ratio,
+                                            )
+                                        },
+                                    );
+                                    match docs_result {
+                                        Ok(docs_ks) => match docs_ks
+                                            .get(entry.id.as_bytes())
+                                        {
+                                            Ok(Some(old_data)) => {
+                                                match serde_json::from_slice(&old_data) {
+                                                    Ok(old_doc) => {
+                                                        let old_content =
+                                                            extract_searchable_content(
+                                                                &old_doc,
+                                                                &meta.searchable_fields,
+                                                            );
+                                                        tokenize(
+                                                            &old_content,
+                                                            self.config.min_token_length,
+                                                        )
+                                                    }
+                                                    Err(_) => HashSet::new(),
+                                                }
+                                            }
+                                            _ => HashSet::new(),
+                                        },
+                                        Err(_) => HashSet::new(),
+                                    }
+                                };
+                                PreprocessedItem {
+                                    key: key.to_vec(),
+                                    collection: entry.collection.clone(),
+                                    id: entry.id.clone(),
+                                    new_words,
+                                    old_words,
+                                    meta: Some(meta),
+                                    doc_bytes: entry.document.clone(),
+                                }
+                            }
+                            None => PreprocessedItem {
+                                key: key.to_vec(),
+                                collection: entry.collection.clone(),
+                                id: entry.id.clone(),
+                                new_words: HashSet::new(),
+                                old_words: HashSet::new(),
+                                meta: None,
+                                doc_bytes: entry.document.clone(),
+                            },
+                        }
+                    }
+                    Err(_) => PreprocessedItem {
+                        key: key.to_vec(),
+                        collection: entry.collection.clone(),
+                        id: entry.id.clone(),
+                        new_words: HashSet::new(),
+                        old_words: HashSet::new(),
+                        meta: None,
+                        doc_bytes: entry.document.clone(),
+                    },
+                }
+            })
+            .collect();
+
+        // Phase 2: Sequential batch building
+        let mut batch =
+            fjall::OwnedWriteBatch::with_capacity(self.db.clone(), preprocessed.len() * 16);
+
+        for pp in &preprocessed {
+            let Some(meta) = &pp.meta else {
                 tracing::error!(
-                    error = ?e,
-                    collection = %entry.collection,
-                    id = %entry.id,
-                    "failed to index queued item"
+                    collection = %pp.collection,
+                    id = %pp.id,
+                    "failed to process queued item"
                 );
+                batch.remove(&queue, &pp.key);
+                continue;
+            };
+
+            let inverted = self.inverted_keyspace(&pp.collection, meta.id_type)?;
+            let docs = self.docs_keyspace(&pp.collection)?;
+
+            for word in pp.old_words.difference(&pp.new_words) {
+                match meta.id_type {
+                    IdType::Number => {
+                        let id_u64 = pp.id.parse::<u64>().map_err(|_| {
+                            AppError::Internal(format!(
+                                "invalid numeric id in storage: {}",
+                                pp.id
+                            ))
+                        })?;
+                        posting_list::remove_from_roaring_posting_list(
+                            &mut batch,
+                            &inverted,
+                            word,
+                            id_u64,
+                        )?;
+                    }
+                    IdType::String => {
+                        posting_list::remove_from_posting_list(
+                            &mut batch,
+                            &inverted,
+                            word,
+                            &pp.id,
+                        )?;
+                    }
+                }
             }
-            batch.remove(&queue, key);
+
+            for word in &pp.new_words {
+                match meta.id_type {
+                    IdType::Number => {
+                        let id_u64 = pp.id.parse::<u64>().map_err(|_| {
+                            AppError::Internal(format!(
+                                "invalid numeric id in storage: {}",
+                                pp.id
+                            ))
+                        })?;
+                        posting_list::add_to_roaring_posting_list(
+                            &mut batch,
+                            &inverted,
+                            word,
+                            id_u64,
+                            self.config.max_roaring_shard_size,
+                        )?;
+                    }
+                    IdType::String => {
+                        posting_list::add_to_posting_list(
+                            &mut batch,
+                            &inverted,
+                            word,
+                            &pp.id,
+                            self.config.max_shard_size,
+                        )?;
+                    }
+                }
+            }
+
+            batch.insert(&docs, pp.id.as_bytes(), &pp.doc_bytes);
+            batch.remove(&queue, &pp.key);
         }
 
         batch.commit()?;
@@ -423,9 +584,14 @@ impl Store {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                if let Err(e) = store.process_pending_queue() {
-                    tracing::error!(error = ?e, "background indexing cycle failed");
-                }
+                let store = std::sync::Arc::clone(&store);
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = store.process_pending_queue() {
+                        tracing::error!(error = ?e, "background indexing cycle failed");
+                    }
+                })
+                .await
+                .ok();
             }
         });
     }
@@ -460,25 +626,15 @@ impl Store {
         };
 
         let docs = self.docs_keyspace(collection)?;
-        let results: Vec<serde_json::Value> = std::thread::scope(|s| {
-            let handles: Vec<_> = ids
-                .iter()
-                .map(|id| {
-                    let docs = docs.clone();
-                    let id = id.clone();
-                    s.spawn(move || {
-                        docs.get(id.as_bytes())
-                            .ok()
-                            .flatten()
-                            .and_then(|data| serde_json::from_slice(&data).ok())
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .filter_map(|h| h.join().ok().flatten())
-                .collect()
-        });
+        let results: Vec<serde_json::Value> = ids
+            .par_iter()
+            .filter_map(|id| {
+                docs.get(id.as_bytes())
+                    .ok()
+                    .flatten()
+                    .and_then(|data| serde_json::from_slice(&data).ok())
+            })
+            .collect();
 
         tracing::debug!(collection = %collection, query = %query, results = results.len(), "search completed");
         Ok(results)
