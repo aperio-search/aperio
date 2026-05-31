@@ -40,10 +40,7 @@ impl AppConfig {
             panic!("failed to read config file '{}': {e}", path.display());
         });
         toml::from_str(&content).unwrap_or_else(|e| {
-            panic!(
-                "failed to parse config file '{}': {e}",
-                path.display()
-            );
+            panic!("failed to parse config file '{}': {e}", path.display());
         })
     }
 
