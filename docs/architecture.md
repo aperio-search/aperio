@@ -133,7 +133,7 @@ Configurable fjall options exposed via `StoreConfig`:
 - `write_buffer_size` — memtable size.
 - `compression` — `"none"` or `"lz4"` for data block compression.
 - `block_cache_size` — global block cache for the database (set on `Database::builder`, not `StoreConfig`).
-- `roaring_inverted_block_size`, `string_inverted_block_size`, `docs_block_size`, `queue_block_size`, `meta_block_size` — per-keyspace data block sizes.
+- `inverted_roaring_block_size`, `inverted_string_block_size`, `docs_block_size`, `queue_block_size`, `meta_block_size` — per-keyspace data block sizes.
 - `inverted_hash_ratio`, `docs_hash_ratio` — hash index ratios for inverted/doc keyspaces.
 - `index_interval` — interval between background index queue flushes.
 - `max_queue_batch_size` — items processed per background tick.

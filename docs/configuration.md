@@ -27,8 +27,8 @@ maintenance_threads = 4
 compression = "lz4"
 # inverted_hash_ratio = 8.0      # hash index for {collection}.inverted (default: 8.0)
 # docs_hash_ratio = 8.0          # hash index for {collection}.docs (default: 8.0)
-roaring_inverted_block_size = 16384    # 16 KiB — roaring bitmap inverted index keyspace
-string_inverted_block_size = 65536     # 64 KiB — string ID inverted index keyspace
+inverted_roaring_block_size = 16384    # 16 KiB — roaring bitmap inverted index keyspace
+inverted_string_block_size = 65536     # 64 KiB — string ID inverted index keyspace
 docs_block_size = 8192                 # 8 KiB — document storage keyspace
 queue_block_size = 32768               # 32 KiB — index queue keyspace
 meta_block_size = 8192                 # 8 KiB — collection metadata keyspace
@@ -40,21 +40,17 @@ search_api_key = "my-search-key"       # search-only API key (search endpoint on
 dumps_folder = "/data/dumps"           # backup snapshot directory
 ```
 
-## Configuration Reference
+## Global Configuration
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `min_token_length` | `integer` | `3` | Minimum length of indexed tokens — shorter tokens are discarded during indexing |
-| `max_shard_size` | `integer` | `1000` | Max document IDs per string posting-list shard |
-| `max_roaring_shard_size` | `integer` | `100000` | Max document IDs per roaring bitmap shard (only applies to `number` collections) |
 | `block_cache_size` | `integer` (bytes) | `33554432` (32 MiB) | fjall LSM block cache capacity. Recommended ~20-25% of available memory |
 | `write_buffer_size` | `integer` (bytes) | `67108864` (64 MiB, fjall default) | Per-keyspace memtable (write buffer) size. Larger values reduce write amplification at the cost of memory |
 | `maintenance_threads` | `integer` | `min(# CPUs, 4)` | Number of background worker threads for compaction, flush, and journal maintenance |
 | `compression` | `string` | `"none"` (fjall default) | Data block compression algorithm: `"none"` or `"lz4"` |
 | `inverted_hash_ratio` | `float` | `8.0` | Hash index ratio for `{collection}.inverted` keyspaces. Higher = more buckets per key, better point-read performance. `0.0` disables. fjall benchmark sweet spot is `8.0` |
 | `docs_hash_ratio` | `float` | `8.0` | Hash index ratio for `{collection}.docs` keyspaces. Same semantics as `inverted_hash_ratio` |
-| `roaring_inverted_block_size` | `integer` (bytes) | `16384` (16 KiB) | Data block size for `{collection}.inverted` keyspaces of **number**-type collections (RoaringTreemap bitmaps). Small blocks favour point lookups during search |
-| `string_inverted_block_size` | `integer` (bytes) | `65536` (64 KiB) | Data block size for `{collection}.inverted` keyspaces of **string**-type collections (rkyv-archived shards) |
 | `docs_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `{collection}.docs` keyspaces (stored documents). Larger blocks improve range-scan throughput |
 | `queue_block_size` | `integer` (bytes) | `32768` (32 KiB) | Data block size for `_index_queue` keyspace. Larger blocks reduce write amplification for sequential append |
 | `meta_block_size` | `integer` (bytes) | `8192` (8 KiB) | Data block size for `_collections` keyspace (system metadata). Small blocks favour point lookups |
@@ -64,3 +60,21 @@ dumps_folder = "/data/dumps"           # backup snapshot directory
 | `main_api_key` | `string` | `SecretApiKey` | Main API key with full access to all endpoints |
 | `search_api_key` | `string` | `PublicApiKey` | Search-only API key for `search` endpoint |
 | `dumps_folder` | `string` | *(unset)* | Directory where backup snapshots are written to and read from. If not set, `/backup/export` and `/backup/import` return a `400` error. Must be an absolute or relative path writable by the server process |
+
+## String-ID Collection Configuration
+
+These settings only affect collections created with `"id_type": "string"`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_shard_size` | `integer` | `1000` | Max document IDs per string posting-list shard |
+| `inverted_string_block_size` | `integer` (bytes) | `65536` (64 KiB) | Data block size for `{collection}.inverted` keyspaces of **string**-type collections (rkyv-archived shards) |
+
+## Number-ID (Roaring) Collection Configuration
+
+These settings only affect collections created with `"id_type": "number"`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_roaring_shard_size` | `integer` | `100000` | Max document IDs per roaring bitmap shard (only applies to `number` collections) |
+| `inverted_roaring_block_size` | `integer` (bytes) | `16384` (16 KiB) | Data block size for `{collection}.inverted` keyspaces of **number**-type collections (RoaringTreemap bitmaps). Small blocks favour point lookups during search |
