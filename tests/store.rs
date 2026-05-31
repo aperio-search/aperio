@@ -117,7 +117,7 @@ fn full_number_workflow() {
 #[test]
 fn string_shard_splitting() {
     let config = StoreConfig {
-        max_shard_size: 3,
+        max_string_shard_size: 3,
         ..Default::default()
     };
     let (store, _dir) = create_store_with_config(config);

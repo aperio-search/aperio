@@ -122,7 +122,12 @@ impl Store {
         let collections = {
             let mut map = HashMap::new();
             if let Ok(meta) = db.keyspace("_collections", || {
-                config.keyspace_opts(config.meta_block_size, 0.0)
+                config.keyspace_opts(
+                    config.meta_block_size,
+                    0.0,
+                    Some(256 * 1024),
+                    config.collections_compression,
+                )
             }) {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
@@ -149,7 +154,12 @@ impl Store {
 
     fn init_next_seq(db: &fjall::Database, config: &StoreConfig) -> u64 {
         let queue = match db.keyspace("_index_queue", || {
-            config.keyspace_opts(config.queue_block_size, 0.0)
+            config.keyspace_opts(
+                config.queue_block_size,
+                0.0,
+                config.index_queue_buffer_size,
+                config.index_queue_compression,
+            )
         }) {
             Ok(q) => q,
             Err(_) => return 1,
@@ -175,34 +185,58 @@ impl Store {
         collection: &str,
         id_type: IdType,
     ) -> Result<fjall::Keyspace, AppError> {
-        let block_size = match id_type {
-            IdType::Number => self.config.inverted_roaring_block_size,
-            IdType::String => self.config.inverted_string_block_size,
+        let (block_size, compression) = match id_type {
+            IdType::Number => (
+                self.config.inverted_roaring_block_size,
+                self.config.inverted_roaring_compression,
+            ),
+            IdType::String => (
+                self.config.inverted_string_block_size,
+                self.config.inverted_string_compression,
+            ),
         };
         let name = format!("{}.inverted", collection);
         Ok(self.db.keyspace(&name, || {
-            self.config
-                .keyspace_opts(block_size, self.config.inverted_hash_ratio)
+            self.config.keyspace_opts(
+                block_size,
+                self.config.inverted_hash_ratio,
+                self.config.inverted_write_buffer_size,
+                compression,
+            )
         })?)
     }
 
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.docs", collection);
         Ok(self.db.keyspace(&name, || {
-            self.config
-                .keyspace_opts(self.config.docs_block_size, self.config.docs_hash_ratio)
+            self.config.keyspace_opts(
+                self.config.docs_block_size,
+                self.config.docs_hash_ratio,
+                self.config.docs_buffer_size,
+                self.config.docs_compression,
+            )
         })?)
     }
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self.db.keyspace("_collections", || {
-            self.config.keyspace_opts(self.config.meta_block_size, 0.0)
+            self.config.keyspace_opts(
+                self.config.meta_block_size,
+                0.0,
+                Some(256 * 1024),
+                self.config.collections_compression,
+            )
         })?)
     }
 
     fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self.db.keyspace("_index_queue", || {
-            self.config.keyspace_opts(self.config.queue_block_size, 0.0)
+            self.config.keyspace_opts(
+                self.config.queue_block_size,
+                0.0,
+                self.config.index_queue_buffer_size,
+                self.config.index_queue_compression,
+            )
         })?)
     }
 
@@ -328,7 +362,7 @@ impl Store {
                         &inverted,
                         word,
                         id,
-                        self.config.max_shard_size,
+                        self.config.max_string_shard_size,
                     )?;
                 }
             }
@@ -426,6 +460,8 @@ impl Store {
                                             self.config.keyspace_opts(
                                                 self.config.docs_block_size,
                                                 self.config.docs_hash_ratio,
+                                                self.config.docs_buffer_size,
+                                                self.config.docs_compression,
                                             )
                                         },
                                     );
@@ -542,7 +578,7 @@ impl Store {
                             &inverted,
                             word,
                             &pp.id,
-                            self.config.max_shard_size,
+                            self.config.max_string_shard_size,
                         )?;
                     }
                 }
@@ -731,21 +767,35 @@ impl Store {
 
         let inv_name = format!("{}.inverted", collection);
         if self.db.keyspace_exists(&inv_name) {
-            let inv_block_size = match meta.id_type {
-                IdType::Number => self.config.inverted_roaring_block_size,
-                IdType::String => self.config.inverted_string_block_size,
+            let (inv_block_size, inv_compression) = match meta.id_type {
+                IdType::Number => (
+                    self.config.inverted_roaring_block_size,
+                    self.config.inverted_roaring_compression,
+                ),
+                IdType::String => (
+                    self.config.inverted_string_block_size,
+                    self.config.inverted_string_compression,
+                ),
             };
             let inv = self.db.keyspace(&inv_name, || {
-                self.config
-                    .keyspace_opts(inv_block_size, self.config.inverted_hash_ratio)
+                self.config.keyspace_opts(
+                    inv_block_size,
+                    self.config.inverted_hash_ratio,
+                    self.config.inverted_write_buffer_size,
+                    inv_compression,
+                )
             })?;
             self.db.delete_keyspace(inv)?;
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
             let docs = self.db.keyspace(&docs_name, || {
-                self.config
-                    .keyspace_opts(self.config.docs_block_size, self.config.docs_hash_ratio)
+                self.config.keyspace_opts(
+                    self.config.docs_block_size,
+                    self.config.docs_hash_ratio,
+                    self.config.docs_buffer_size,
+                    self.config.docs_compression,
+                )
             })?;
             self.db.delete_keyspace(docs)?;
         }
@@ -868,15 +918,21 @@ mod tests {
     fn store_config_defaults() {
         let cfg = StoreConfig::default();
         assert_eq!(cfg.min_token_length, 3);
-        assert_eq!(cfg.max_shard_size, 1000);
+        assert_eq!(cfg.max_string_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
-        assert!(cfg.write_buffer_size.is_none());
+        assert!(cfg.inverted_write_buffer_size.is_none());
+        assert!(cfg.docs_buffer_size.is_none());
+        assert!(cfg.index_queue_buffer_size.is_none());
         assert_eq!(cfg.inverted_roaring_block_size, 16384);
         assert_eq!(cfg.inverted_string_block_size, 65536);
         assert_eq!(cfg.docs_block_size, 8192);
         assert_eq!(cfg.queue_block_size, 32768);
         assert_eq!(cfg.meta_block_size, 8192);
-        assert!(cfg.compression.is_none());
+        assert!(cfg.docs_compression.is_none());
+        assert!(cfg.inverted_string_compression.is_none());
+        assert!(cfg.inverted_roaring_compression.is_none());
+        assert!(cfg.index_queue_compression.is_none());
+        assert!(cfg.collections_compression.is_none());
         assert_eq!(cfg.inverted_hash_ratio, 8.0);
         assert_eq!(cfg.docs_hash_ratio, 8.0);
     }
@@ -1313,7 +1369,7 @@ mod tests {
     #[test]
     fn shard_splitting_string() {
         let conf = StoreConfig {
-            max_shard_size: 3,
+            max_string_shard_size: 3,
             ..Default::default()
         };
         let (store, _dir) = test_store(conf);

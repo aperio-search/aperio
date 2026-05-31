@@ -87,7 +87,7 @@ Collections are created with an `id_type` that determines the posting list forma
 
 #### String IDs
 
-Posting lists are split into shards of configurable `max_shard_size` (default 1000). Each shard stores sorted `Vec<String>` archived via rkyv. A binary search across shards locates the correct shard for insertion.
+Posting lists are split into shards of configurable `max_string_shard_size` (default 1000). Each shard stores sorted `Vec<String>` archived via rkyv. A binary search across shards locates the correct shard for insertion.
 
 A `Vec<u64>` would be faster for posting-list operations, but `u64` can't represent arbitrary string IDs like `UUIDs`, so `Vec<String>` is used as the general-purpose format.
 
@@ -130,8 +130,10 @@ This batches write operations and reduces lock contention. When the background i
 
 Configurable fjall options exposed via `StoreConfig`:
 
-- `write_buffer_size` — memtable size.
-- `compression` — `"none"` or `"lz4"` for data block compression.
+- `inverted_write_buffer_size` — memtable size for `{collection}.inverted`.
+- `docs_buffer_size` — memtable size for `{collection}.docs`.
+- `index_queue_buffer_size` — memtable size for `_index_queue`.
+- `docs_compression`, `inverted_string_compression`, `inverted_roaring_compression`, `index_queue_compression`, `collections_compression` — per-keyspace data block compression (`"none"` or `"lz4"`).
 - `block_cache_size` — global block cache for the database (set on `Database::builder`, not `StoreConfig`).
 - `inverted_roaring_block_size`, `inverted_string_block_size`, `docs_block_size`, `queue_block_size`, `meta_block_size` — per-keyspace data block sizes.
 - `inverted_hash_ratio`, `docs_hash_ratio` — hash index ratios for inverted/doc keyspaces.
