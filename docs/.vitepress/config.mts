@@ -55,14 +55,22 @@ export default defineConfig({
           },
           { text: "Deploying", link: "/deploying" },
           { text: "Import & Export", link: "/import-export" },
+          {
+            text: "Configuration",
+            items: [
+              { text: "Configuration File", link: "/configuration" },
+              {
+                text: "Environment Variables",
+                link: "/environment-variables",
+              },
+            ],
+          },
+          { text: "Performance", link: "/performance" },
         ],
       },
       {
         text: "Reference",
         items: [
-          { text: "Configuration", link: "/configuration" },
-          { text: "Environment Variables", link: "/environment-variables" },
-          { text: "Performance", link: "/performance" },
           { text: "API Reference", link: "/api-reference" },
           { text: "Error Handling", link: "/error-handling" },
           { text: "Status", link: "/status" },
