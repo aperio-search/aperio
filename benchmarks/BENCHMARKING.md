@@ -35,8 +35,11 @@ apt instal unzip
 curl -fsSL https://bun.sh/install | bash
 source /root/.bashrc
 
+# Disable THP on the server. This prevents fjall block cache allocation to gets mapped even though the cache is logically empty
+echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+
 # If you wanna the small dataset:
-curl -o book.csv https://raw.githubusercontent.com/MainakRepositor/Datasets/refs/heads/master/books.csv
+curl -o books.csv https://raw.githubusercontent.com/MainakRepositor/Datasets/refs/heads/master/books.csv
 
 # If you wanna the large dataset:
 curl -o title.basics.tsv.gz https://datasets.imdbws.com/title.basics.tsv.gz
