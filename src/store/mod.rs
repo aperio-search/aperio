@@ -120,7 +120,7 @@ impl Store {
         let collections = {
             let mut map = HashMap::new();
             if let Ok(meta) = db.keyspace("_collections", || {
-                config.keyspace_opts(config.meta_block_size)
+                config.keyspace_opts(config.meta_block_size, 0.0)
             }) {
                 for guard in meta.iter() {
                     if let Ok((key, value)) = guard.into_inner() {
@@ -147,7 +147,7 @@ impl Store {
 
     fn init_next_seq(db: &fjall::Database, config: &StoreConfig) -> u64 {
         let queue = match db.keyspace("_index_queue", || {
-            config.keyspace_opts(config.queue_block_size)
+            config.keyspace_opts(config.queue_block_size, 0.0)
         }) {
             Ok(q) => q,
             Err(_) => return 1,
@@ -180,25 +180,28 @@ impl Store {
         let name = format!("{}.inverted", collection);
         Ok(self
             .db
-            .keyspace(&name, || self.config.keyspace_opts(block_size))?)
+            .keyspace(&name, || self.config.keyspace_opts(block_size, self.config.inverted_hash_ratio))?)
     }
 
     fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
         let name = format!("{}.docs", collection);
         Ok(self.db.keyspace(&name, || {
-            self.config.keyspace_opts(self.config.docs_block_size)
+            self.config
+                .keyspace_opts(self.config.docs_block_size, self.config.docs_hash_ratio)
         })?)
     }
 
     fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self.db.keyspace("_collections", || {
-            self.config.keyspace_opts(self.config.meta_block_size)
+            self.config
+                .keyspace_opts(self.config.meta_block_size, 0.0)
         })?)
     }
 
     fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
         Ok(self.db.keyspace("_index_queue", || {
-            self.config.keyspace_opts(self.config.queue_block_size)
+            self.config
+                .keyspace_opts(self.config.queue_block_size, 0.0)
         })?)
     }
 
@@ -594,13 +597,13 @@ impl Store {
             };
             let inv = self
                 .db
-                .keyspace(&inv_name, || self.config.keyspace_opts(inv_block_size))?;
+                .keyspace(&inv_name, || self.config.keyspace_opts(inv_block_size, self.config.inverted_hash_ratio))?;
             self.db.delete_keyspace(inv)?;
         }
         let docs_name = format!("{}.docs", collection);
         if self.db.keyspace_exists(&docs_name) {
             let docs = self.db.keyspace(&docs_name, || {
-                self.config.keyspace_opts(self.config.docs_block_size)
+                self.config.keyspace_opts(self.config.docs_block_size, self.config.docs_hash_ratio)
             })?;
             self.db.delete_keyspace(docs)?;
         }
@@ -732,6 +735,8 @@ mod tests {
         assert_eq!(cfg.queue_block_size, 32768);
         assert_eq!(cfg.meta_block_size, 8192);
         assert!(cfg.compression.is_none());
+        assert_eq!(cfg.inverted_hash_ratio, 8.0);
+        assert_eq!(cfg.docs_hash_ratio, 8.0);
     }
 
     #[test]
