@@ -5,7 +5,7 @@
 To ensure your Aperio automatically recovers from system reboots, always pass the `--restart always` flag to Docker:
 
 ```sh
-docker run -e DATA_DIR=/data --restart-always -d -p 3000:3000 --name aperio andresribeiro/aperio
+docker run -e DATA_DIR=/data --restart-always -d -p 3000:3000 --name aperio ghcr.io/aperio-search/aperio
 ```
 
 ## Storage Recommendations

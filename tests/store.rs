@@ -46,10 +46,16 @@ fn full_string_workflow() {
     assert_eq!(info.document_count, 0);
 
     store
-        .upsert("docs", json!({"id": "id1", "content": "the quick brown fox"}))
+        .upsert(
+            "docs",
+            json!({"id": "id1", "content": "the quick brown fox"}),
+        )
         .unwrap();
     store
-        .upsert("docs", json!({"id": "id2", "content": "jumps over the lazy dog"}))
+        .upsert(
+            "docs",
+            json!({"id": "id2", "content": "jumps over the lazy dog"}),
+        )
         .unwrap();
     store
         .upsert("docs", json!({"id": "id3", "content": "brown fox quick"}))

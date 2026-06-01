@@ -16,7 +16,7 @@ docker run \
   -e DATA_DIR=/data \
   -e CONFIG_FILE=/data/config.toml \
   -p 3000:3000 \
-  andresribeiro/aperio
+  ghcr.io/aperio-search/aperio
 ```
 
 See the [Configuration](/configuration) page for all available TOML settings.

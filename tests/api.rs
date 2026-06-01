@@ -20,7 +20,11 @@ fn test_app() -> (Router, TempDir, Arc<Store>) {
     let auth = aperio::auth::AuthConfig::default();
     let dumps = dir.path().join("dumps");
     std::fs::create_dir_all(&dumps).unwrap();
-    (routes::create_router(store.clone(), auth, Some(dumps)), dir, store)
+    (
+        routes::create_router(store.clone(), auth, Some(dumps)),
+        dir,
+        store,
+    )
 }
 
 fn test_app_no_dumps() -> (Router, TempDir, Arc<Store>) {
