@@ -31,7 +31,7 @@ cargo test --lib         # unit tests only
 cargo test --test api    # HTTP API integration tests only
 cargo test --test store  # store integration tests only
 cargo test <test_name>   # single test by name
-cargo run                # dev server on :3000 (data persists to ./data/aperio_data)
+cargo run                # dev server on :3000 (data persists to ./data/aperio)
 cargo run --release      # optimized build
 ```
 
@@ -46,7 +46,7 @@ Two environment variables control the server:
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio_data`) |
+| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio`) |
 | `CONFIG_FILE` | (none) | Path to optional TOML config file |
 
 Config file parsing is **strict**: on any read or parse error the process panics with a clear message. No fallback to defaults.
