@@ -341,9 +341,7 @@ impl Store {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::error!(error = %e, "failed to deserialize queued document");
-                    let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), 1);
-                    batch.remove(&queue, key);
-                    batch.commit()?;
+                    queue.remove(key)?;
                     continue;
                 }
             };
@@ -361,9 +359,7 @@ impl Store {
                         collection = %entry.collection,
                         "queued item references unknown collection"
                     );
-                    let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), 1);
-                    batch.remove(&queue, key);
-                    batch.commit()?;
+                    queue.remove(key)?;
                     continue;
                 }
             };
@@ -386,34 +382,34 @@ impl Store {
                 None => HashSet::new(),
             };
 
-            let mut batch = fjall::OwnedWriteBatch::with_capacity(
-                self.db.clone(),
-                new_words.len() + old_words.len() + 2,
-            );
+            let is_new = old_words.is_empty();
 
-            for word in old_words.difference(&new_words) {
-                match meta.id_type {
-                    IdType::Number => {
-                        let id_u64 = entry.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!(
-                                "invalid numeric id in storage: {}",
-                                entry.id
-                            ))
-                        })?;
-                        posting_list::remove_from_roaring_posting_list(
-                            &mut batch, &inverted, word, id_u64,
-                        )?;
-                    }
-                    IdType::String => {
-                        posting_list::remove_from_posting_list(
-                            &mut batch,
-                            &inverted,
-                            word,
-                            &entry.id,
-                        )?;
+            if !is_new {
+                for word in old_words.difference(&new_words) {
+                    match meta.id_type {
+                        IdType::Number => {
+                            let id_u64 = entry.id.parse::<u64>().map_err(|_| {
+                                AppError::Internal(format!(
+                                    "invalid numeric id in storage: {}",
+                                    entry.id
+                                ))
+                            })?;
+                            posting_list::remove_from_roaring_posting_list(
+                                &inverted, word, id_u64,
+                            )?;
+                        }
+                        IdType::String => {
+                            posting_list::remove_from_posting_list(
+                                &inverted,
+                                word,
+                                &entry.id,
+                            )?;
+                        }
                     }
                 }
             }
+
+            docs.insert(entry.id.as_bytes(), &entry.document)?;
 
             for word in &new_words {
                 match meta.id_type {
@@ -425,7 +421,6 @@ impl Store {
                             ))
                         })?;
                         posting_list::add_to_roaring_posting_list(
-                            &mut batch,
                             &inverted,
                             word,
                             id_u64,
@@ -434,7 +429,6 @@ impl Store {
                     }
                     IdType::String => {
                         posting_list::add_to_posting_list(
-                            &mut batch,
                             &inverted,
                             word,
                             &entry.id,
@@ -444,9 +438,7 @@ impl Store {
                 }
             }
 
-            batch.insert(&docs, entry.id.as_bytes(), &entry.document);
-            batch.remove(&queue, key);
-            batch.commit()?;
+            queue.remove(key)?;
         }
 
         Ok(())
@@ -542,8 +534,6 @@ impl Store {
         let content = extract_searchable_content(&doc, &meta.searchable_fields);
         let tokens = tokenize(&content, self.config.min_token_length);
 
-        let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), tokens.len() + 1);
-
         for word in &tokens {
             match meta.id_type {
                 IdType::Number => {
@@ -553,18 +543,15 @@ impl Store {
                             id, collection
                         ))
                     })?;
-                    posting_list::remove_from_roaring_posting_list(
-                        &mut batch, &inverted, word, id_u64,
-                    )?;
+                    posting_list::remove_from_roaring_posting_list(&inverted, word, id_u64)?;
                 }
                 IdType::String => {
-                    posting_list::remove_from_posting_list(&mut batch, &inverted, word, id)?
+                    posting_list::remove_from_posting_list(&inverted, word, id)?
                 }
             }
         }
 
-        batch.remove(&docs, id.as_bytes());
-        batch.commit()?;
+        docs.remove(id.as_bytes())?;
         tracing::debug!(collection = %collection, id = %id, "item deleted");
         Ok(())
     }
