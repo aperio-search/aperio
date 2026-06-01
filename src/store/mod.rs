@@ -400,11 +400,7 @@ impl Store {
                             )?;
                         }
                         IdType::String => {
-                            posting_list::remove_from_posting_list(
-                                &inverted,
-                                word,
-                                &entry.id,
-                            )?;
+                            posting_list::remove_from_posting_list(&inverted, word, &entry.id)?;
                         }
                     }
                 }
@@ -548,9 +544,7 @@ impl Store {
                     })?;
                     posting_list::remove_from_roaring_posting_list(&inverted, word, id_u64)?;
                 }
-                IdType::String => {
-                    posting_list::remove_from_posting_list(&inverted, word, id)?
-                }
+                IdType::String => posting_list::remove_from_posting_list(&inverted, word, id)?,
             }
         }
 

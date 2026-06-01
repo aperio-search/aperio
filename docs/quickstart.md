@@ -11,7 +11,7 @@ Aperio is an screamingly fast search engine designed to use minimal resource con
 ## Installation
 
 ```sh
-docker run -e DATA_DIR=/data -p 3000:3000 --name aperio andresribeiro/aperio
+docker run -e DATA_DIR=/data -p 3000:3000 --name aperio ghcr.io/aperio-search/aperio
 ```
 
 | Param | Description

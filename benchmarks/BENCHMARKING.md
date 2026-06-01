@@ -23,8 +23,8 @@ apt update
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh ./get-docker.sh
 
-docker pull andresribeiro/aperio
-docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" --name aperio andresribeiro/aperio
+docker pull ghcr.io/aperio-search/aperio
+docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" --name aperio ghcr.io/aperio-search/aperio
 ```
 
 ### Client Configuration

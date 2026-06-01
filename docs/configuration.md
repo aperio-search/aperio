@@ -12,7 +12,7 @@ docker run \
   -e DATA_DIR=/data \
   -e CONFIG_FILE=/data/config.toml \
   -p 3000:3000 \
-  andresribeiro/aperio
+  ghcr.io/aperio-search/aperio
 ```
 
 Example `config.toml`:
@@ -120,5 +120,3 @@ Data block size per keyspace. Larger blocks improve range-scan throughput; small
 | `main_api_key` | `string` | `SecretApiKey` | Main API key with full access to all endpoints |
 | `search_api_key` | `string` | `PublicApiKey` | Search-only API key for `search` endpoint |
 | `dumps_folder` | `string` | *(unset)* | Directory where backup snapshots are written to and read from. If not set, `/backup/export` and `/backup/import` return a `400` error. Must be an absolute or relative path writable by the server process |
-
-
