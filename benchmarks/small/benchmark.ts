@@ -22,7 +22,7 @@ function getRandomTerm() {
   return SEARCH_TERMS[Math.floor(Math.random() * SEARCH_TERMS.length)];
 }
 
-async function apiGet(path) {
+async function apiGet(path: string) {
   const response = await fetch(`${BASE_URL}${path}`, { headers });
   if (!response.ok) {
     const err = new Error(`HTTP ${response.status}`);
@@ -42,7 +42,7 @@ async function runRateBenchmark() {
   console.log(`Total Payload:     ${totalTargetQueries} queries`);
   console.log(`==================================================\n`);
 
-  const serverElapsedTimes = [];
+  const serverElapsedTimes: number[] = [];
   let firedCount = 0;
   let completedCount = 0;
   let failedCount = 0;
@@ -93,7 +93,12 @@ async function runRateBenchmark() {
   });
 }
 
-function printReport(times, completed, failed, totalTimeMs) {
+function printReport(
+  times: number[],
+  completed: number,
+  failed: number,
+  totalTimeMs: number,
+) {
   if (times.length === 0) {
     console.error("All queries failed or engine returned no metrics.");
     return;
