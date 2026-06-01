@@ -249,7 +249,23 @@ describe("AperioClient", () => {
 		});
 	});
 
-	describe("error handling", () => {
+	describe("queueDepth", () => {
+	it("returns pending count", async () => {
+		globalThis.fetch = mock.fn(() =>
+			Promise.resolve({
+				ok: true,
+				status: 200,
+				text: () => Promise.resolve(JSON.stringify({ pending: 5 })),
+				json: () => Promise.resolve({ pending: 5 }),
+			}),
+		);
+
+		const result = await client.queueDepth();
+		assert.strictEqual(result.pending, 5);
+	});
+});
+
+describe("error handling", () => {
 		it("throws AperioError on 4xx", async () => {
 			globalThis.fetch = mock.fn(() =>
 				Promise.resolve({

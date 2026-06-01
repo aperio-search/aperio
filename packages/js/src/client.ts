@@ -7,6 +7,7 @@ import {
 	type ExportResponse,
 	type ImportResponse,
 	type ListCollectionsResponse,
+	type QueueDepthResponse,
 	type SearchParams,
 	type SearchResponse,
 	type StatusResponse,
@@ -152,6 +153,11 @@ export class AperioClient {
 		const url = `/collections/${encodeURIComponent(collection)}/search?${query.toString()}`;
 		const data = await this.#request("GET", url);
 		return toCamel(data) as unknown as SearchResponse;
+	}
+
+	async queueDepth(): Promise<QueueDepthResponse> {
+		const data = await this.#request("GET", "/queue");
+		return toCamel(data) as unknown as QueueDepthResponse;
 	}
 
 	async exportBackup(): Promise<ExportResponse> {

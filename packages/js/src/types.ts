@@ -55,6 +55,10 @@ export interface ImportResponse {
 	ok: boolean;
 }
 
+export interface QueueDepthResponse {
+	pending: number;
+}
+
 export interface StatusResponse {
 	ok: boolean;
 }
