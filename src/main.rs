@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() {
     let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let db_path = PathBuf::from(&data_dir).join("aperio_data");
+    let db_path = PathBuf::from(&data_dir).join("aperio");
 
     let config = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
     let app_config = AppConfig::load(config.as_deref());

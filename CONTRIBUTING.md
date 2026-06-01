@@ -22,14 +22,14 @@ cargo test --lib         # unit tests only
 cargo test --test api    # HTTP API integration tests only
 cargo test --test store  # store integration tests only
 cargo test <test_name>   # single test by name
-cargo run                # dev server on :3000, data persists to ./data/aperio_data
+cargo run                # dev server on :3000, data persists to ./data/aperio
 ```
 
 ### Runtime Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio_data`) |
+| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio`) |
 | `CONFIG_FILE` | — | Path to optional TOML config file |
 
 Config file parsing is **strict** — on any read or parse error the process panics with a clear message.
