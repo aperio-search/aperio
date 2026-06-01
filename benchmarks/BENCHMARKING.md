@@ -45,11 +45,11 @@ curl -o books.csv https://raw.githubusercontent.com/MainakRepositor/Datasets/ref
 curl -o title.basics.tsv.gz https://datasets.imdbws.com/title.basics.tsv.gz
 gunzip title.basics.tsv.gz
 
-touch index.js benchmark.js
+touch index.ts benchmark.ts
 ```
 
-- Small Dataset: copy [small/index.js](/small/index.js) code below into `index.js` and [small/benchmark.js](/small/benchmark.js) into `benchmark.js`. On both files replace `http://localhost:3000` with the IP of Worker.
-- Large Dataset: copy [large/index.js](/large/index.js) code below into `index.js` and [large/benchmark.js](/large/benchmark.js) into `benchmark.js`. On both files replace `http://localhost:3000` with the IP of Worker.
+- Small Dataset: copy [small/index.ts](/small/index.ts) code below into `index.ts` and [small/benchmark.ts](/small/benchmark.ts) into `benchmark.ts`. On both files replace `http://localhost:3000` with the IP of Worker.
+- Large Dataset: copy [large/index.ts](/large/index.ts) code below into `index.ts` and [large/benchmark.ts](/large/benchmark.ts) into `benchmark.ts`. On both files replace `http://localhost:3000` with the IP of Worker.
 
 ### Benchmarking
 
@@ -57,7 +57,7 @@ Run this on Client:
 
 ```js
 // Index the dataset.
-bun index.js
+bun index.ts
 // The search engine indexes data asynchronously. Wait a few minutes after the script stop running.
-bun benchmark.js
+bun benchmark.ts
 ```
