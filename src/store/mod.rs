@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
 use rayon::prelude::*;
@@ -110,7 +110,6 @@ pub struct Store {
     lock: Mutex<()>,
     collections: RwLock<HashMap<String, config::CollectionMeta>>,
     next_seq: AtomicU64,
-    background_active: AtomicBool,
 }
 
 impl Store {
@@ -148,7 +147,6 @@ impl Store {
             lock: Mutex::new(()),
             collections: RwLock::new(collections),
             next_seq: AtomicU64::new(next_seq),
-            background_active: AtomicBool::new(false),
         }
     }
 
@@ -307,94 +305,9 @@ impl Store {
         })
     }
 
-    fn upsert_apply_batch(
-        &self,
-        collection: &str,
-        id: &str,
-        doc: &serde_json::Value,
-        batch: &mut fjall::OwnedWriteBatch,
-    ) -> Result<(), AppError> {
-        let meta = self.validate_collection_exists(collection)?;
-
-        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
-        let docs = self.docs_keyspace(collection)?;
-        let searchable_content = extract_searchable_content(doc, &meta.searchable_fields);
-        let new_words = tokenize(&searchable_content, self.config.min_token_length);
-
-        // If old document exists, compute its tokens and remove diff
-        if let Some(old_data) = docs.get(id.as_bytes())?
-            && let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data)
-        {
-            let old_content = extract_searchable_content(&old_doc, &meta.searchable_fields);
-            let old_words = tokenize(&old_content, self.config.min_token_length);
-            for word in old_words.difference(&new_words) {
-                match meta.id_type {
-                    IdType::Number => {
-                        let id_u64 = id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!("invalid numeric id in storage: {}", id))
-                        })?;
-                        posting_list::remove_from_roaring_posting_list(
-                            batch, &inverted, word, id_u64,
-                        )?;
-                    }
-                    IdType::String => {
-                        posting_list::remove_from_posting_list(batch, &inverted, word, id)?;
-                    }
-                }
-            }
-        }
-
-        for word in &new_words {
-            match meta.id_type {
-                IdType::Number => {
-                    let id_u64 = id.parse::<u64>().map_err(|_| {
-                        AppError::Internal(format!("invalid numeric id in storage: {}", id))
-                    })?;
-                    posting_list::add_to_roaring_posting_list(
-                        batch,
-                        &inverted,
-                        word,
-                        id_u64,
-                        self.config.max_roaring_shard_size,
-                    )?;
-                }
-                IdType::String => {
-                    posting_list::add_to_posting_list(
-                        batch,
-                        &inverted,
-                        word,
-                        id,
-                        self.config.max_string_shard_size,
-                    )?;
-                }
-            }
-        }
-
-        let doc_bytes = serde_json::to_vec(doc).map_err(|e| AppError::Internal(e.to_string()))?;
-        batch.insert(&docs, id.as_bytes(), &doc_bytes);
-        tracing::debug!(collection = %collection, id = %id, tokens = new_words.len(), "item upserted");
-        Ok(())
-    }
-
-    fn upsert_internal(
-        &self,
-        collection: &str,
-        id: &str,
-        doc: &serde_json::Value,
-    ) -> Result<(), AppError> {
-        let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), 64);
-        self.upsert_apply_batch(collection, id, doc, &mut batch)?;
-        batch.commit()?;
-        Ok(())
-    }
-
     pub fn upsert(&self, collection: &str, doc: serde_json::Value) -> Result<(), AppError> {
         let meta = self.validate_collection_exists(collection)?;
         let id = extract_id(&doc, meta.id_type)?;
-
-        if !self.background_active.load(Ordering::Acquire) {
-            return self.upsert_internal(collection, &id, &doc);
-        }
 
         let seq = self.allocate_seq();
         let queue = self.queue_keyspace()?;
@@ -423,130 +336,69 @@ impl Store {
             .take(self.config.max_queue_batch_size)
             .collect();
 
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        // Phase 1: Parallel tokenization (CPU-bound, independent)
-        struct PreprocessedItem {
-            key: Vec<u8>,
-            collection: String,
-            id: String,
-            new_words: HashSet<String>,
-            old_words: HashSet<String>,
-            meta: Option<config::CollectionMeta>,
-            doc_bytes: Vec<u8>,
-        }
-
-        let preprocessed: Vec<PreprocessedItem> = items
-            .par_iter()
-            .map(|(key, entry)| {
-                let doc = serde_json::from_slice::<serde_json::Value>(&entry.document);
-                match doc {
-                    Ok(doc) => {
-                        let meta = self
-                            .collections
-                            .read()
-                            .unwrap()
-                            .get(&entry.collection)
-                            .cloned();
-                        match meta {
-                            Some(meta) => {
-                                let content =
-                                    extract_searchable_content(&doc, &meta.searchable_fields);
-                                let new_words = tokenize(&content, self.config.min_token_length);
-                                let old_words = {
-                                    let docs_result = self.db.keyspace(
-                                        &format!("{}.docs", entry.collection),
-                                        || {
-                                            self.config.keyspace_opts(
-                                                self.config.docs_block_size,
-                                                self.config.docs_hash_ratio,
-                                                self.config.docs_buffer_size,
-                                                self.config.docs_compression,
-                                            )
-                                        },
-                                    );
-                                    match docs_result {
-                                        Ok(docs_ks) => match docs_ks.get(entry.id.as_bytes()) {
-                                            Ok(Some(old_data)) => {
-                                                match serde_json::from_slice(&old_data) {
-                                                    Ok(old_doc) => {
-                                                        let old_content =
-                                                            extract_searchable_content(
-                                                                &old_doc,
-                                                                &meta.searchable_fields,
-                                                            );
-                                                        tokenize(
-                                                            &old_content,
-                                                            self.config.min_token_length,
-                                                        )
-                                                    }
-                                                    Err(_) => HashSet::new(),
-                                                }
-                                            }
-                                            _ => HashSet::new(),
-                                        },
-                                        Err(_) => HashSet::new(),
-                                    }
-                                };
-                                PreprocessedItem {
-                                    key: key.to_vec(),
-                                    collection: entry.collection.clone(),
-                                    id: entry.id.clone(),
-                                    new_words,
-                                    old_words,
-                                    meta: Some(meta),
-                                    doc_bytes: entry.document.clone(),
-                                }
-                            }
-                            None => PreprocessedItem {
-                                key: key.to_vec(),
-                                collection: entry.collection.clone(),
-                                id: entry.id.clone(),
-                                new_words: HashSet::new(),
-                                old_words: HashSet::new(),
-                                meta: None,
-                                doc_bytes: entry.document.clone(),
-                            },
-                        }
-                    }
-                    Err(_) => PreprocessedItem {
-                        key: key.to_vec(),
-                        collection: entry.collection.clone(),
-                        id: entry.id.clone(),
-                        new_words: HashSet::new(),
-                        old_words: HashSet::new(),
-                        meta: None,
-                        doc_bytes: entry.document.clone(),
-                    },
+        for (key, entry) in &items {
+            let doc = match serde_json::from_slice::<serde_json::Value>(&entry.document) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to deserialize queued document");
+                    let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), 1);
+                    batch.remove(&queue, key);
+                    batch.commit()?;
+                    continue;
                 }
-            })
-            .collect();
-
-        // Phase 2: Sequential batch building
-        let mut batch =
-            fjall::OwnedWriteBatch::with_capacity(self.db.clone(), preprocessed.len() * 16);
-
-        for pp in &preprocessed {
-            let Some(meta) = &pp.meta else {
-                tracing::error!(
-                    collection = %pp.collection,
-                    id = %pp.id,
-                    "failed to process queued item"
-                );
-                batch.remove(&queue, &pp.key);
-                continue;
             };
 
-            let inverted = self.inverted_keyspace(&pp.collection, meta.id_type)?;
-            let docs = self.docs_keyspace(&pp.collection)?;
+            let meta = match self
+                .collections
+                .read()
+                .unwrap()
+                .get(&entry.collection)
+                .cloned()
+            {
+                Some(m) => m,
+                None => {
+                    tracing::error!(
+                        collection = %entry.collection,
+                        "queued item references unknown collection"
+                    );
+                    let mut batch = fjall::OwnedWriteBatch::with_capacity(self.db.clone(), 1);
+                    batch.remove(&queue, key);
+                    batch.commit()?;
+                    continue;
+                }
+            };
 
-            for word in pp.old_words.difference(&pp.new_words) {
+            let inverted = self.inverted_keyspace(&entry.collection, meta.id_type)?;
+            let docs = self.docs_keyspace(&entry.collection)?;
+            let content = extract_searchable_content(&doc, &meta.searchable_fields);
+            let new_words = tokenize(&content, self.config.min_token_length);
+
+            let old_words = match docs.get(entry.id.as_bytes())? {
+                Some(old_data) => {
+                    if let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data) {
+                        let old_content =
+                            extract_searchable_content(&old_doc, &meta.searchable_fields);
+                        tokenize(&old_content, self.config.min_token_length)
+                    } else {
+                        HashSet::new()
+                    }
+                }
+                None => HashSet::new(),
+            };
+
+            let mut batch = fjall::OwnedWriteBatch::with_capacity(
+                self.db.clone(),
+                new_words.len() + old_words.len() + 2,
+            );
+
+            for word in old_words.difference(&new_words) {
                 match meta.id_type {
                     IdType::Number => {
-                        let id_u64 = pp.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!("invalid numeric id in storage: {}", pp.id))
+                        let id_u64 = entry.id.parse::<u64>().map_err(|_| {
+                            AppError::Internal(format!(
+                                "invalid numeric id in storage: {}",
+                                entry.id
+                            ))
                         })?;
                         posting_list::remove_from_roaring_posting_list(
                             &mut batch, &inverted, word, id_u64,
@@ -554,17 +406,23 @@ impl Store {
                     }
                     IdType::String => {
                         posting_list::remove_from_posting_list(
-                            &mut batch, &inverted, word, &pp.id,
+                            &mut batch,
+                            &inverted,
+                            word,
+                            &entry.id,
                         )?;
                     }
                 }
             }
 
-            for word in &pp.new_words {
+            for word in &new_words {
                 match meta.id_type {
                     IdType::Number => {
-                        let id_u64 = pp.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!("invalid numeric id in storage: {}", pp.id))
+                        let id_u64 = entry.id.parse::<u64>().map_err(|_| {
+                            AppError::Internal(format!(
+                                "invalid numeric id in storage: {}",
+                                entry.id
+                            ))
                         })?;
                         posting_list::add_to_roaring_posting_list(
                             &mut batch,
@@ -579,18 +437,18 @@ impl Store {
                             &mut batch,
                             &inverted,
                             word,
-                            &pp.id,
+                            &entry.id,
                             self.config.max_string_shard_size,
                         )?;
                     }
                 }
             }
 
-            batch.insert(&docs, pp.id.as_bytes(), &pp.doc_bytes);
-            batch.remove(&queue, &pp.key);
+            batch.insert(&docs, entry.id.as_bytes(), &entry.document);
+            batch.remove(&queue, key);
+            batch.commit()?;
         }
 
-        batch.commit()?;
         Ok(())
     }
 
@@ -598,8 +456,12 @@ impl Store {
         self.process_pending_queue()
     }
 
+    pub fn queue_depth(&self) -> Result<u64, AppError> {
+        let queue = self.queue_keyspace()?;
+        Ok(queue.len()? as u64)
+    }
+
     pub fn spawn_background(self: &std::sync::Arc<Self>) {
-        self.background_active.store(true, Ordering::Release);
         let store = std::sync::Arc::clone(self);
         let interval = self.config.index_interval;
         tokio::spawn(async move {
@@ -664,9 +526,7 @@ impl Store {
     }
 
     pub fn delete_item(&self, collection: &str, id: &str) -> Result<(), AppError> {
-        if self.background_active.load(Ordering::Acquire) {
-            self.process_pending_queue()?;
-        }
+        self.process_pending_queue()?;
         let meta = self.validate_collection_exists(collection)?;
 
         let _lock = self.lock.lock().unwrap();
@@ -1000,6 +860,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
@@ -1013,6 +874,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": 42, "content": "hello world"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["42"]);
     }
@@ -1032,6 +894,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "3", "content": "banana cherry"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store
             .search("docs", "apple banana", false, 10, None)
             .unwrap();
@@ -1047,6 +910,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store
             .search("docs", "nonexistent", false, 10, None)
             .unwrap();
@@ -1062,6 +926,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "", false, 10, None).unwrap();
         assert!(results.is_empty());
     }
@@ -1078,6 +943,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "a", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["a", "b"]);
     }
@@ -1094,6 +960,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "b", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", true, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["b", "a"]);
     }
@@ -1113,6 +980,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "c", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, Some("a")).unwrap();
         assert_eq!(ids(&results), vec!["b", "c"]);
     }
@@ -1132,6 +1000,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "c", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", true, 10, Some("c")).unwrap();
         assert_eq!(ids(&results), vec!["b", "a"]);
     }
@@ -1151,6 +1020,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "c", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 2, None).unwrap();
         assert_eq!(results.len(), 2);
     }
@@ -1167,6 +1037,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "apple cherry"}))
             .unwrap();
+        store.flush().unwrap();
         let r1 = store.search("docs", "banana", false, 10, None).unwrap();
         assert!(r1.is_empty());
         let r2 = store.search("docs", "cherry", false, 10, None).unwrap();
@@ -1184,6 +1055,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
+        store.flush().unwrap();
         store.delete_item("docs", "1").unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert!(results.is_empty());
@@ -1208,10 +1080,12 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         store.delete_item("docs", "1").unwrap();
         store
             .upsert("docs", json!({"id": "1", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
@@ -1225,6 +1099,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
+        store.flush().unwrap();
         let info = store.collection_info("docs").unwrap();
         assert_eq!(info.name, "docs");
         assert_eq!(info.id_type, "string");
@@ -1300,6 +1175,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": 2, "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1", "2", "3"]);
     }
@@ -1316,6 +1192,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": 2, "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", true, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["2", "1"]);
     }
@@ -1335,6 +1212,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": 3, "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, Some("1")).unwrap();
         assert_eq!(ids(&results), vec!["2", "3"]);
     }
@@ -1351,6 +1229,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": "1", "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
@@ -1367,6 +1246,7 @@ mod tests {
         store
             .upsert("docs", json!({"id": 1, "content": "hello"}))
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
@@ -1386,6 +1266,7 @@ mod tests {
                 .upsert("docs", json!({"id": i.to_string(), "content": "hello"}))
                 .unwrap();
         }
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 20, None).unwrap();
         assert_eq!(results.len(), 10);
     }
@@ -1405,6 +1286,7 @@ mod tests {
                 .upsert("docs", json!({"id": i, "content": "hello"}))
                 .unwrap();
         }
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 20, None).unwrap();
         assert_eq!(results.len(), 10);
     }
@@ -1421,6 +1303,7 @@ mod tests {
                 json!({"id": "1", "title": "hello", "body": "world", "ignored": "yes"}),
             )
             .unwrap();
+        store.flush().unwrap();
         // "world" should not be indexed because "body" is not a searchable field
         let r1 = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(r1.len(), 1);
@@ -1457,6 +1340,7 @@ mod tests {
                 json!({"id": "1", "title": "hello", "body": "world"}),
             )
             .unwrap();
+        store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["id"], "1");

@@ -143,6 +143,11 @@ pub struct StatusResponse {
     pub ok: bool,
 }
 
+#[derive(Serialize)]
+pub struct QueueDepthResponse {
+    pub pending: u64,
+}
+
 #[derive(Deserialize)]
 pub struct CreateCollectionRequest {
     pub name: String,

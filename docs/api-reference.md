@@ -32,6 +32,12 @@ Complete list of all Aperio HTTP endpoints.
 |---|---|---|
 | `GET` | `/collections/{collection}/search` | Search documents matching a query |
 
+## Queue
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/queue` | Returns the number of documents waiting to be indexed |
+
 ## Backup
 
 | Method | Path | Description |
