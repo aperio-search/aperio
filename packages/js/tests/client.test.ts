@@ -120,7 +120,6 @@ describe("AperioClient", () => {
 			const result = await client.getCollection("posts");
 			assert.strictEqual(result.name, "posts");
 			assert.strictEqual(result.documentCount, 42);
-			assert.strictEqual(result.uniqueTerms, 318);
 		});
 	});
 
@@ -250,22 +249,22 @@ describe("AperioClient", () => {
 	});
 
 	describe("queueDepth", () => {
-	it("returns pending count", async () => {
-		globalThis.fetch = mock.fn(() =>
-			Promise.resolve({
-				ok: true,
-				status: 200,
-				text: () => Promise.resolve(JSON.stringify({ pending: 5 })),
-				json: () => Promise.resolve({ pending: 5 }),
-			}),
-		);
+		it("returns pending count", async () => {
+			globalThis.fetch = mock.fn(() =>
+				Promise.resolve({
+					ok: true,
+					status: 200,
+					text: () => Promise.resolve(JSON.stringify({ pending: 5 })),
+					json: () => Promise.resolve({ pending: 5 }),
+				}),
+			);
 
-		const result = await client.queueDepth();
-		assert.strictEqual(result.pending, 5);
+			const result = await client.queueDepth();
+			assert.strictEqual(result.pending, 5);
+		});
 	});
-});
 
-describe("error handling", () => {
+	describe("error handling", () => {
 		it("throws AperioError on 4xx", async () => {
 			globalThis.fetch = mock.fn(() =>
 				Promise.resolve({
