@@ -5,10 +5,19 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/aperio-search/aperio"><img src="https://img.shields.io/badge/aperio-Screamingly%20fast-green" alt="Aperio" height=50></a>
-<img src="https://github.com/aperio-search/aperio/actions/workflows/rust.yml/badge.svg" alt="CI Status">
-<img src="https://img.shields.io/github/stars/aperio-search/aperio" alt="stars">
-<img src="https://img.shields.io/badge/language-Rust-orange" alt="Rust">
+  <a href="https://github.com/aperio-search/aperio">
+    <img src="https://img.shields.io/badge/aperio-Screamingly%20fast-2ea44f?style=for-the-badge" alt="Aperio">
+  </a>
+
+  <img src="https://img.shields.io/github/actions/workflow/status/aperio-search/aperio/rust.yml?branch=main&label=Rust%20CI&style=for-the-badge&logo=github&logoColor=white&color=2ea44f" alt="Rust CI Status">
+
+  <a href="https://deps.rs/repo/github/aperio-search/aperio">
+    <img src="https://img.shields.io/badge/dependencies-up%20to%20date-2ea44f?style=for-the-badge&logo=rust&logoColor=white" alt="Dependency Status">
+  </a>
+
+  <img src="https://img.shields.io/github/stars/aperio-search/aperio?style=for-the-badge&logo=github&logoColor=white&color=dfb317" alt="stars">
+
+  <img src="https://img.shields.io/badge/language-Rust-e4371b?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
 </p>
 
 <div align="center">
