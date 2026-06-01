@@ -6,6 +6,7 @@
 
 <p align="center">
 <a href="https://github.com/aperio-search/aperio"><img src="https://img.shields.io/badge/aperio-Screamingly%20fast-green" alt="Aperio" height=50></a>
+<img src="https://github.com/aperio-search/aperio/actions/workflows/rust.yml/badge.svg" alt="CI Status">
 <img src="https://img.shields.io/github/stars/aperio-search/aperio" alt="stars">
 <img src="https://img.shields.io/badge/language-Rust-orange" alt="Rust">
 </p>
