@@ -88,6 +88,7 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `GET` | `/collections/{name}/search?q=...` | Search documents |
 | `POST` | `/backup/export` | Export database snapshot to a file |
 | `POST` | `/backup/import` | Import a snapshot from the dumps folder |
+| `GET` | `/queue` | Pending index queue depth |
 
 ### Store Engine (`src/store/`)
 
@@ -98,7 +99,6 @@ The `Store` struct (in `src/store/mod.rs`) is the heart of Aperio. It holds:
 - **`collections: RwLock<HashMap<String, CollectionMeta>>`** — in-memory registry of known collections, their ID type and searchable fields.
 - **`lock: Mutex<()>`** — serializes write operations (upsert/delete) for index consistency.
 - **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
-- **`background_active: AtomicBool`** — whether the background indexer is running.
 
 The store logic is split across sub-modules:
 - `src/store/config.rs` — `StoreConfig`, `IdType`, `CollectionMeta`, `PostingShard`, `QueuedIndex`.
@@ -125,7 +125,7 @@ Collections are created with an `id_type` that determines the posting list forma
 
 | `id_type` | Storage format | Data structure |
 |---|---|---|
-| `string` | rkyv-archived shards | `PostingShard { first, last, ids: Vec<String> }` |
+| `string` | rkyv-archived shards | `PostingShard { ids: Vec<String> }` |
 | `number` | Serialized bitmap shards | `RoaringTreemap` per shard |
 
 ##### String IDs
