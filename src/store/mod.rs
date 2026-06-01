@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
+use fjall::PersistMode;
 use rayon::prelude::*;
 
 use charabia::Tokenize;
@@ -440,6 +441,8 @@ impl Store {
 
             queue.remove(key)?;
         }
+
+        self.db.persist(PersistMode::SyncAll)?;
 
         Ok(())
     }
