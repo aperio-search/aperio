@@ -8,6 +8,7 @@ export type {
 	ExportResponse,
 	ImportResponse,
 	ListCollectionsResponse,
+	QueueDepthResponse,
 	SearchParams,
 	SearchResponse,
 	StatusResponse,
