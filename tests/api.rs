@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-fn test_app() -> (Router, TempDir) {
+fn test_app() -> (Router, TempDir, Arc<Store>) {
     let dir = TempDir::new().unwrap();
     let db = fjall::Database::builder(dir.path())
         .cache_size(1_000_000)
@@ -20,10 +20,10 @@ fn test_app() -> (Router, TempDir) {
     let auth = aperio::auth::AuthConfig::default();
     let dumps = dir.path().join("dumps");
     std::fs::create_dir_all(&dumps).unwrap();
-    (routes::create_router(store, auth, Some(dumps)), dir)
+    (routes::create_router(store.clone(), auth, Some(dumps)), dir, store)
 }
 
-fn test_app_no_dumps() -> (Router, TempDir) {
+fn test_app_no_dumps() -> (Router, TempDir, Arc<Store>) {
     let dir = TempDir::new().unwrap();
     let db = fjall::Database::builder(dir.path())
         .cache_size(1_000_000)
@@ -31,7 +31,7 @@ fn test_app_no_dumps() -> (Router, TempDir) {
         .unwrap();
     let store = Arc::new(Store::new(db));
     let auth = aperio::auth::AuthConfig::default();
-    (routes::create_router(store, auth, None), dir)
+    (routes::create_router(store.clone(), auth, None), dir, store)
 }
 
 fn json_request(method: Method, path: &str, body: Value) -> Request<Body> {
@@ -104,7 +104,7 @@ fn search_key_json(method: Method, path: &str, body: Value) -> Request<Body> {
 
 #[tokio::test]
 async fn status_is_public() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, noauth_get("/status")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"ok": true}));
@@ -112,7 +112,7 @@ async fn status_is_public() {
 
 #[tokio::test]
 async fn missing_auth_returns_401() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, noauth_get("/collections")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "unauthorized");
@@ -120,7 +120,7 @@ async fn missing_auth_returns_401() {
 
 #[tokio::test]
 async fn invalid_auth_returns_401() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = Request::builder()
         .method(Method::GET)
         .uri("/collections")
@@ -134,7 +134,7 @@ async fn invalid_auth_returns_401() {
 
 #[tokio::test]
 async fn search_key_can_search() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -149,6 +149,7 @@ async fn search_key_can_search() {
         json!({"id": "1", "content": "hello world"}),
     );
     send(&app, req).await;
+    store.flush().unwrap();
 
     let (_status, body) = send(&app, search_key_get("/collections/docs/search?q=hello")).await;
     assert_eq!(
@@ -159,7 +160,7 @@ async fn search_key_can_search() {
 
 #[tokio::test]
 async fn search_key_cannot_admin() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
 
     let req = search_key_json(
         Method::POST,
@@ -175,7 +176,7 @@ async fn search_key_cannot_admin() {
 
 #[tokio::test]
 async fn get_status() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, get_request("/status")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"ok": true}));
@@ -183,7 +184,7 @@ async fn get_status() {
 
 #[tokio::test]
 async fn get_empty_collections() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, get_request("/collections")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"collections": []}));
@@ -191,7 +192,7 @@ async fn get_empty_collections() {
 
 #[tokio::test]
 async fn create_collection() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = json_request(
         Method::POST,
         "/collections",
@@ -207,7 +208,7 @@ async fn create_collection() {
 
 #[tokio::test]
 async fn create_duplicate_collection() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = json_request(
         Method::POST,
         "/collections",
@@ -226,7 +227,7 @@ async fn create_duplicate_collection() {
 
 #[tokio::test]
 async fn create_collection_invalid_id_type() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = json_request(
         Method::POST,
         "/collections",
@@ -239,7 +240,7 @@ async fn create_collection_invalid_id_type() {
 
 #[tokio::test]
 async fn upsert_and_search() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -254,6 +255,7 @@ async fn upsert_and_search() {
         json!({"id": "1", "content": "hello world"}),
     );
     send(&app, req).await;
+    store.flush().unwrap();
 
     let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
     assert_eq!(
@@ -265,7 +267,7 @@ async fn upsert_and_search() {
 
 #[tokio::test]
 async fn search_with_pagination() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -282,6 +284,7 @@ async fn search_with_pagination() {
         );
         send(&app, req).await;
     }
+    store.flush().unwrap();
 
     let (_status, page1) = send(
         &app,
@@ -307,7 +310,7 @@ async fn search_with_pagination() {
 
 #[tokio::test]
 async fn search_sort_asc() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -324,6 +327,7 @@ async fn search_sort_asc() {
         );
         send(&app, req).await;
     }
+    store.flush().unwrap();
 
     let (_status, body) = send(
         &app,
@@ -338,7 +342,7 @@ async fn search_sort_asc() {
 
 #[tokio::test]
 async fn search_sort_desc() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -355,6 +359,7 @@ async fn search_sort_desc() {
         );
         send(&app, req).await;
     }
+    store.flush().unwrap();
 
     let (_status, body) = send(
         &app,
@@ -369,7 +374,7 @@ async fn search_sort_desc() {
 
 #[tokio::test]
 async fn delete_item_endpoint() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -384,6 +389,7 @@ async fn delete_item_endpoint() {
         json!({"id": "1", "content": "hello"}),
     );
     send(&app, req).await;
+    store.flush().unwrap();
 
     send(&app, delete_request("/collections/docs/items/1")).await;
 
@@ -393,7 +399,7 @@ async fn delete_item_endpoint() {
 
 #[tokio::test]
 async fn delete_nonexistent_item() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -408,7 +414,7 @@ async fn delete_nonexistent_item() {
 
 #[tokio::test]
 async fn collection_info_endpoint() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -423,6 +429,7 @@ async fn collection_info_endpoint() {
         json!({"id": "1", "content": "hello world"}),
     );
     send(&app, req).await;
+    store.flush().unwrap();
 
     let (_status, body) = send(&app, get_request("/collections/docs")).await;
     assert_eq!(body["name"], "docs");
@@ -433,7 +440,7 @@ async fn collection_info_endpoint() {
 
 #[tokio::test]
 async fn delete_collection_endpoint() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -449,7 +456,7 @@ async fn delete_collection_endpoint() {
 
 #[tokio::test]
 async fn not_found_fallback() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, get_request("/nonexistent")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not found");
@@ -457,7 +464,7 @@ async fn not_found_fallback() {
 
 #[tokio::test]
 async fn search_nonexistent_collection() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, get_request("/collections/nope/search?q=hello")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["error"].as_str().unwrap().contains("not found"));
@@ -465,7 +472,7 @@ async fn search_nonexistent_collection() {
 
 #[tokio::test]
 async fn upsert_nonexistent_collection() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = json_request(
         Method::POST,
         "/collections/nope/items",
@@ -477,7 +484,7 @@ async fn upsert_nonexistent_collection() {
 
 #[tokio::test]
 async fn list_collections_after_create() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -503,7 +510,7 @@ async fn list_collections_after_create() {
 
 #[tokio::test]
 async fn create_collection_missing_fields() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = json_request(Method::POST, "/collections", json!({}));
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -511,7 +518,7 @@ async fn create_collection_missing_fields() {
 
 #[tokio::test]
 async fn upsert_with_numeric_id() {
-    let (app, _dir) = test_app();
+    let (app, _dir, store) = test_app();
 
     let req = json_request(
         Method::POST,
@@ -526,6 +533,7 @@ async fn upsert_with_numeric_id() {
         json!({"id": 42, "content": "hello world"}),
     );
     send(&app, req).await;
+    store.flush().unwrap();
 
     let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
     assert_eq!(
@@ -554,7 +562,7 @@ fn empty_post(path: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn export_endpoint_main_key() {
-    let (app, dir) = test_app();
+    let (app, dir, store) = test_app();
 
     let req = main_key_post(
         "/collections",
@@ -566,6 +574,7 @@ async fn export_endpoint_main_key() {
         json!({"id": "1", "content": "hello world"}),
     );
     send(&app, req).await;
+    store.flush().unwrap();
 
     // Export (no body — auto-generated filename)
     let req = empty_post("/backup/export");
@@ -614,7 +623,7 @@ async fn export_and_import_roundtrip_via_endpoint() {
         .unwrap();
     let store1 = Arc::new(Store::new(db1));
     let auth1 = aperio::auth::AuthConfig::default();
-    let app1 = routes::create_router(store1, auth1, Some(dumps.clone()));
+    let app1 = routes::create_router(store1.clone(), auth1, Some(dumps.clone()));
 
     let req = main_key_post(
         "/collections",
@@ -626,6 +635,7 @@ async fn export_and_import_roundtrip_via_endpoint() {
         json!({"id": "a", "content": "hello world"}),
     );
     send(&app1, req).await;
+    store1.flush().unwrap();
 
     // Export
     let req = empty_post("/backup/export");
@@ -653,7 +663,7 @@ async fn export_and_import_roundtrip_via_endpoint() {
 
 #[tokio::test]
 async fn export_requires_main_key() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = Request::builder()
         .method(Method::POST)
         .uri("/backup/export")
@@ -667,7 +677,7 @@ async fn export_requires_main_key() {
 
 #[tokio::test]
 async fn import_requires_main_key() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = search_key_json(Method::POST, "/backup/import", json!({"name": "any.bin"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -675,7 +685,7 @@ async fn import_requires_main_key() {
 
 #[tokio::test]
 async fn import_nonexistent_file_returns_error() {
-    let (app, _dir) = test_app();
+    let (app, _dir, _store) = test_app();
     let req = main_key_post("/backup/import", json!({"name": "nope.bin"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -683,7 +693,7 @@ async fn import_nonexistent_file_returns_error() {
 
 #[tokio::test]
 async fn export_without_dumps_folder_returns_error() {
-    let (app, _dir) = test_app_no_dumps();
+    let (app, _dir, _store) = test_app_no_dumps();
     let req = main_key_post("/backup/export", json!({}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -691,7 +701,7 @@ async fn export_without_dumps_folder_returns_error() {
 
 #[tokio::test]
 async fn import_without_dumps_folder_returns_error() {
-    let (app, _dir) = test_app_no_dumps();
+    let (app, _dir, _store) = test_app_no_dumps();
     let req = main_key_post("/backup/import", json!({"name": "any.bin"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

@@ -74,6 +74,7 @@ export default defineConfig({
           { text: "Searching Documents", link: "/searching-documents" },
           { text: "Deploying", link: "/deploying" },
           { text: "Import & Export", link: "/import-export" },
+          { text: "Queue", link: "/queue" },
           {
             text: "Configuration",
             items: [

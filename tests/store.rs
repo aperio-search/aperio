@@ -58,8 +58,15 @@ fn full_string_workflow() {
         )
         .unwrap();
     store
+        .upsert("docs", json!({"id": "id1", "content": "the quick brown fox"}))
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "id2", "content": "jumps over the lazy dog"}))
+        .unwrap();
+    store
         .upsert("docs", json!({"id": "id3", "content": "brown fox quick"}))
         .unwrap();
+    store.flush().unwrap();
 
     let all = store.search("docs", "fox", false, 10, None).unwrap();
     assert_eq!(all.len(), 2);
@@ -97,6 +104,7 @@ fn full_number_workflow() {
     store
         .upsert("docs", json!({"id": 30, "content": "world there"}))
         .unwrap();
+    store.flush().unwrap();
 
     let r1 = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&r1), vec!["10", "20"]);
@@ -130,6 +138,7 @@ fn string_shard_splitting() {
             .upsert("docs", json!({"id": i.to_string(), "content": "hello"}))
             .unwrap();
     }
+    store.flush().unwrap();
 
     let results = store.search("docs", "hello", false, 20, None).unwrap();
     assert_eq!(results.len(), 12);
@@ -156,6 +165,7 @@ fn roaring_shard_splitting() {
             .upsert("docs", json!({"id": i, "content": "hello"}))
             .unwrap();
     }
+    store.flush().unwrap();
 
     let results = store.search("docs", "hello", false, 20, None).unwrap();
     assert_eq!(results.len(), 12);
@@ -179,6 +189,7 @@ fn update_document_removes_old_tokens() {
     store
         .upsert("docs", json!({"id": "1", "content": "apple cherry"}))
         .unwrap();
+    store.flush().unwrap();
 
     let banana = store.search("docs", "banana", false, 10, None).unwrap();
     assert!(banana.is_empty(), "banana should have been removed");
@@ -202,6 +213,7 @@ fn search_pagination_edge_cases() {
             .upsert("docs", json!({"id": c, "content": "hello"}))
             .unwrap();
     }
+    store.flush().unwrap();
 
     let page1 = store.search("docs", "hello", false, 2, None).unwrap();
     assert_eq!(ids(&page1), vec!["a", "b"]);
@@ -257,6 +269,7 @@ fn multiple_collections_isolated() {
     store
         .upsert("b", json!({"id": "1", "content": "foo bar"}))
         .unwrap();
+    store.flush().unwrap();
 
     let r1 = store.search("a", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&r1), vec!["1"]);
@@ -281,6 +294,7 @@ fn delete_all_items_in_collection() {
     store
         .upsert("docs", json!({"id": "2", "content": "hello"}))
         .unwrap();
+    store.flush().unwrap();
 
     store.delete_item("docs", "1").unwrap();
     store.delete_item("docs", "2").unwrap();
@@ -307,6 +321,7 @@ fn persist_and_reopen() {
     store
         .upsert("docs", json!({"id": "persist", "content": "hello world"}))
         .unwrap();
+    store.flush().unwrap();
     drop(store);
 
     let db = fjall::Database::builder(dir.path())
@@ -341,6 +356,7 @@ fn export_import_roundtrip() {
     store
         .upsert("docs", json!({"id": "b", "content": "foo bar"}))
         .unwrap();
+    store.flush().unwrap();
 
     // Export via Store method (uses snapshot internally)
     let data = store.export_snapshot().unwrap();
@@ -405,6 +421,7 @@ fn export_import_number_collection() {
     store
         .upsert("nums", json!({"id": 99, "val": "world"}))
         .unwrap();
+    store.flush().unwrap();
 
     let data = store.export_snapshot().unwrap();
     drop(store);

@@ -12,7 +12,8 @@ use crate::auth::AuthConfig;
 use crate::error::AppError;
 use crate::models::{
     BackupFile, CollectionCreated, CollectionInfo, CreateCollectionRequest, ExportResponse,
-    ImportResponse, ListCollectionsResponse, SearchParams, SearchResponse, StatusResponse,
+    ImportResponse, ListCollectionsResponse, QueueDepthResponse, SearchParams, SearchResponse,
+    StatusResponse,
 };
 use crate::store::Store;
 
@@ -33,6 +34,7 @@ fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
         .route("/collections/{collection}/items/{id}", delete(delete_item))
         .route("/collections/{collection}", get(collection_info))
         .route("/collections/{collection}", delete(delete_collection))
+        .route("/queue", get(queue_depth_handler))
         .route("/backup/export", post(export_handler))
         .route("/backup/import", post(import_handler))
         .layer(TraceLayer::new_for_http())
@@ -191,6 +193,16 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+async fn queue_depth_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<QueueDepthResponse>, AppError> {
+    let store = Arc::clone(&state.store);
+    let pending = tokio::task::spawn_blocking(move || store.queue_depth())
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(QueueDepthResponse { pending }))
 }
 
 fn require_dumps_folder(state: &AppState) -> Result<&PathBuf, AppError> {
