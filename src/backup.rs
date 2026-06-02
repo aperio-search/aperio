@@ -23,18 +23,19 @@ pub fn export_snapshot(env: &heed::Env) -> Result<Vec<u8>, AppError> {
         buf.write_all(&(name_bytes.len() as u16).to_le_bytes())?;
         buf.write_all(name_bytes)?;
 
-        let kv_pairs: Vec<(Vec<u8>, Vec<u8>)> = match env.open_database::<Raw, Raw>(&txn, Some(name)) {
-            Ok(Some(db)) => {
-                let mut pairs = Vec::new();
-                if let Ok(iter) = db.iter(&txn) {
-                    for result in iter.flatten() {
-                        pairs.push((result.0, result.1));
+        let kv_pairs: Vec<(Vec<u8>, Vec<u8>)> =
+            match env.open_database::<Raw, Raw>(&txn, Some(name)) {
+                Ok(Some(db)) => {
+                    let mut pairs = Vec::new();
+                    if let Ok(iter) = db.iter(&txn) {
+                        for result in iter.flatten() {
+                            pairs.push((result.0, result.1));
+                        }
                     }
+                    pairs
                 }
-                pairs
-            }
-            _ => Vec::new(),
-        };
+                _ => Vec::new(),
+            };
 
         buf.write_all(&(kv_pairs.len() as u64).to_le_bytes())?;
 

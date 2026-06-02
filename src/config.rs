@@ -162,5 +162,4 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
         assert_eq!(store_cfg.max_queue_batch_size, 500);
     }
-
 }
