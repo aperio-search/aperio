@@ -6,21 +6,27 @@ use tempfile::TempDir;
 
 fn create_store() -> (Store, TempDir) {
     let dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("db"))
-        .unwrap();
-    let store = Store::new(db);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(dir.path())
+            .unwrap()
+    };
+    let store = Store::new(env);
     (store, dir)
 }
 
 fn create_store_with_config(config: StoreConfig) -> (Store, TempDir) {
     let dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("db"))
-        .unwrap();
-    let store = Store::with_config(db, config);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(dir.path())
+            .unwrap()
+    };
+    let store = Store::with_config(env, config);
     (store, dir)
 }
 
@@ -303,13 +309,17 @@ fn delete_all_items_in_collection() {
 #[test]
 fn persist_and_reopen() {
     let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("db");
+    let db_path = dir.path().join("aperio");
+    std::fs::create_dir_all(&db_path).unwrap();
 
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(&db_path)
-        .unwrap();
-    let store = Store::new(db);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&db_path)
+            .unwrap()
+    };
+    let store = Store::new(env);
     store
         .create_collection("docs", "string", &["content".into()])
         .unwrap();
@@ -319,11 +329,14 @@ fn persist_and_reopen() {
     store.flush().unwrap();
     drop(store);
 
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(&db_path)
-        .unwrap();
-    let store = Store::new(db);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&db_path)
+            .unwrap()
+    };
+    let store = Store::new(env);
     let results = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&results), vec!["persist"]);
 
@@ -337,11 +350,15 @@ fn export_import_roundtrip() {
 
     // Seed source
     let src_path = dir.path().join("src");
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(&src_path)
-        .unwrap();
-    let store = Store::new(db);
+    std::fs::create_dir_all(&src_path).unwrap();
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&src_path)
+            .unwrap()
+    };
+    let store = Store::new(env);
     store
         .create_collection("docs", "string", &["content".into()])
         .unwrap();
@@ -360,11 +377,15 @@ fn export_import_roundtrip() {
 
     // Import into a fresh store
     let dst_path = dir.path().join("dst");
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(&dst_path)
-        .unwrap();
-    let store = Store::new(db);
+    std::fs::create_dir_all(&dst_path).unwrap();
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&dst_path)
+            .unwrap()
+    };
+    let store = Store::new(env);
     store.import_snapshot(&data).unwrap();
 
     // Verify
@@ -384,11 +405,14 @@ fn export_import_roundtrip() {
 #[test]
 fn export_empty_database() {
     let dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("db"))
-        .unwrap();
-    let store = Store::new(db);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(dir.path())
+            .unwrap()
+    };
+    let store = Store::new(env);
     let data = store.export_snapshot().unwrap();
     // Should produce valid export data (empty keyspace list)
     assert!(
@@ -402,11 +426,15 @@ fn export_import_number_collection() {
     let dir = TempDir::new().unwrap();
 
     let src_path = dir.path().join("src");
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(&src_path)
-        .unwrap();
-    let store = Store::new(db);
+    std::fs::create_dir_all(&src_path).unwrap();
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&src_path)
+            .unwrap()
+    };
+    let store = Store::new(env);
     store
         .create_collection("nums", "number", &["val".into()])
         .unwrap();
@@ -422,11 +450,15 @@ fn export_import_number_collection() {
     drop(store);
 
     let dst_path = dir.path().join("dst");
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(&dst_path)
-        .unwrap();
-    let store = Store::new(db);
+    std::fs::create_dir_all(&dst_path).unwrap();
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&dst_path)
+            .unwrap()
+    };
+    let store = Store::new(env);
     store.import_snapshot(&data).unwrap();
 
     let r = store.search("nums", "hello", false, 10, None).unwrap();
@@ -441,11 +473,14 @@ fn export_import_number_collection() {
 #[test]
 fn export_import_bad_magic() {
     let dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("db"))
-        .unwrap();
-    let store = Store::new(db);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(dir.path())
+            .unwrap()
+    };
+    let store = Store::new(env);
     let err = store.import_snapshot(b"garbage data").unwrap_err();
     assert!(err.to_string().contains("bad magic"), "got: {err}");
 }

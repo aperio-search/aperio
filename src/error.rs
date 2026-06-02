@@ -34,38 +34,8 @@ impl IntoResponse for AppError {
     }
 }
 
-impl From<redb::Error> for AppError {
-    fn from(e: redb::Error) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
-impl From<redb::DatabaseError> for AppError {
-    fn from(e: redb::DatabaseError) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
-impl From<redb::TableError> for AppError {
-    fn from(e: redb::TableError) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
-impl From<redb::StorageError> for AppError {
-    fn from(e: redb::StorageError) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
-impl From<redb::CommitError> for AppError {
-    fn from(e: redb::CommitError) -> Self {
-        AppError::Internal(e.to_string())
-    }
-}
-
-impl From<redb::TransactionError> for AppError {
-    fn from(e: redb::TransactionError) -> Self {
+impl From<heed::Error> for AppError {
+    fn from(e: heed::Error) -> Self {
         AppError::Internal(e.to_string())
     }
 }

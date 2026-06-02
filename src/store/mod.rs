@@ -1,11 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use rayon::prelude::*;
-
 use charabia::Tokenize;
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use heed::types::Unit;
+use heed::{BytesDecode, BytesEncode, BoxedError};
 use roaring::RoaringTreemap;
 
 use crate::error::AppError;
@@ -14,11 +14,6 @@ use crate::models::{
 };
 
 pub use config::{CollectionMeta, IdType, StoreConfig};
-
-pub(crate) const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
-pub(crate) const QUEUE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("queue");
-pub(crate) const DOCS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("docs");
-pub(crate) const INVERTED: TableDefinition<&[u8], &[u8]> = TableDefinition::new("inverted");
 
 macro_rules! encode_rkyv {
     ($value:expr) => {{
@@ -110,8 +105,33 @@ mod config;
 mod posting_list;
 mod search;
 
+/// A bytes codec that returns `Vec<u8>` (Sized) for decoded data.
+pub struct Raw;
+
+impl<'a> BytesEncode<'a> for Raw {
+    type EItem = [u8];
+
+    fn bytes_encode(item: &'a [u8]) -> Result<Cow<'a, [u8]>, BoxedError> {
+        Ok(Cow::Borrowed(item))
+    }
+}
+
+impl<'a> BytesDecode<'a> for Raw {
+    type DItem = Vec<u8>;
+
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Vec<u8>, BoxedError> {
+        Ok(bytes.to_vec())
+    }
+}
+
+pub type DbBytes = heed::Database<Raw, Raw>;
+
 pub struct Store {
-    db: Database,
+    env: heed::Env,
+    db_meta: DbBytes,
+    db_queue: DbBytes,
+    db_docs: DbBytes,
+    db_inverted: DbBytes,
     config: StoreConfig,
     lock: Mutex<()>,
     collections: RwLock<HashMap<String, config::CollectionMeta>>,
@@ -119,32 +139,29 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(db: Database) -> Self {
-        Self::with_config(db, StoreConfig::default())
+    pub fn new(env: heed::Env) -> Self {
+        Self::with_config(env, StoreConfig::default())
     }
 
-    pub fn with_config(db: Database, config: StoreConfig) -> Self {
-        let collections = {
-            let mut map = HashMap::new();
-            if let Ok(txn) = db.begin_read() {
-                if let Ok(meta) = txn.open_table(META) {
-                    if let Ok(iter) = meta.iter() {
-                        for (key, value) in iter.flatten() {
-                            let name = key.value().to_string();
-                            let buf = value.value().to_vec();
-                            if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &buf) {
-                                map.insert(name, col_meta);
-                            }
-                        }
-                    }
-                }
-            }
-            map
-        };
-        let next_seq = Self::init_next_seq(&db);
+    pub fn with_config(env: heed::Env, config: StoreConfig) -> Self {
+        // Open or create databases. Since create_database is idempotent (opens existing or creates new),
+        // we just use it directly for all databases.
+        let mut wtxn = env.write_txn().unwrap();
+        let db_meta = env.create_database(&mut wtxn, Some("meta")).unwrap();
+        let db_queue = env.create_database(&mut wtxn, Some("queue")).unwrap();
+        let db_docs = env.create_database(&mut wtxn, Some("docs")).unwrap();
+        let db_inverted = env.create_database(&mut wtxn, Some("inverted")).unwrap();
+        wtxn.commit().unwrap();
+
+        let collections = HashMap::new();
+        let next_seq = Self::init_next_seq(&env, db_queue);
 
         Self {
-            db,
+            env,
+            db_meta,
+            db_queue,
+            db_docs,
+            db_inverted,
             config,
             lock: Mutex::new(()),
             collections: RwLock::new(collections),
@@ -152,31 +169,28 @@ impl Store {
         }
     }
 
-    fn init_next_seq(db: &Database) -> u64 {
-        let txn = match db.begin_read() {
+    fn init_next_seq(env: &heed::Env, db_queue: DbBytes) -> u64 {
+        let rtxn = match env.read_txn() {
             Ok(t) => t,
             Err(_) => return 1,
         };
-        let table = match txn.open_table(QUEUE) {
-            Ok(t) => t,
-            Err(_) => return 1,
+        let mut real_max = 0u64;
+        let iter = db_queue.remap_data_type::<Unit>().iter(&rtxn);
+        let all_keys: Vec<Vec<u8>> = match iter {
+            Ok(it) => it.filter_map(|r| r.ok()).map(|(k, _)| k).collect(),
+            Err(_) => Vec::new(),
         };
-        let mut max = 0u64;
-        if let Ok(iter) = table.iter() {
-            for result in iter {
-                if let Ok((key, _)) = result {
-                    if key.value().len() == 8 {
-                        let mut buf = [0u8; 8];
-                        buf.copy_from_slice(key.value());
-                        let seq = u64::from_be_bytes(buf);
-                        if seq > max {
-                            max = seq;
-                        }
-                    }
+        for key in all_keys {
+            if key.len() == 8 {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&key);
+                let seq = u64::from_be_bytes(buf);
+                if seq > real_max {
+                    real_max = seq;
                 }
             }
         }
-        max + 1
+        real_max + 1
     }
 
     fn allocate_seq(&self) -> u64 {
@@ -187,12 +201,20 @@ impl Store {
         &self,
         collection: &str,
     ) -> Result<config::CollectionMeta, AppError> {
-        self.collections
-            .read()
-            .unwrap()
-            .get(collection)
-            .cloned()
-            .ok_or_else(|| AppError::NotFound(format!("collection '{}' not found", collection)))
+        // Check cache first
+        if let Some(meta) = self.collections.read().unwrap().get(collection).cloned() {
+            return Ok(meta);
+        }
+        // Fall back to database
+        if let Ok(rtxn) = self.env.read_txn() {
+            if let Ok(Some(data)) = self.db_meta.get(&rtxn, collection.as_bytes()) {
+                if let Ok(meta) = decode_rkyv!(config::CollectionMeta, &data) {
+                    self.collections.write().unwrap().insert(collection.to_string(), meta.clone());
+                    return Ok(meta);
+                }
+            }
+        }
+        Err(AppError::NotFound(format!("collection '{}' not found", collection)))
     }
 
     pub fn create_collection(
@@ -228,13 +250,10 @@ impl Store {
                 searchable_fields: searchable_fields.to_vec(),
             };
 
-            let txn = self.db.begin_write()?;
-            {
-                let mut meta = txn.open_table(META)?;
-                let value = encode_rkyv!(&col_meta)?;
-                meta.insert(name, value.as_slice())?;
-            }
-            txn.commit()?;
+            let mut wtxn = self.env.write_txn()?;
+            let value = encode_rkyv!(&col_meta)?;
+            self.db_meta.put(&mut wtxn, name.as_bytes(), value.as_slice())?;
+            wtxn.commit()?;
 
             map.insert(name.to_string(), col_meta);
         }
@@ -259,131 +278,99 @@ impl Store {
             id: id.to_string(),
             document: doc_bytes,
         };
-        let txn = self.db.begin_write()?;
-        {
-            let mut queue = txn.open_table(QUEUE)?;
-            let seq_key = seq.to_be_bytes();
-            queue.insert(seq_key.as_slice(), encode_rkyv!(&entry)?.as_slice())?;
-        }
-        txn.commit()?;
+        let mut wtxn = self.env.write_txn()?;
+        let seq_key = seq.to_be_bytes();
+        self.db_queue.put(&mut wtxn, seq_key.as_slice(), encode_rkyv!(&entry)?.as_slice())?;
+        wtxn.commit()?;
         tracing::debug!(collection = %collection, id = %id, seq = %seq, "item queued for indexing");
         Ok(())
     }
 
     pub fn process_pending_queue(&self) -> Result<(), AppError> {
         let items: Vec<(Vec<u8>, config::QueuedIndex)> = {
-            let txn = match self.db.begin_read() {
+            let rtxn = match self.env.read_txn() {
                 Ok(t) => t,
                 Err(_) => return Ok(()),
             };
-            let queue = match txn.open_table(QUEUE) {
-                Ok(q) => q,
-                Err(_) => return Ok(()),
-            };
-            queue.iter()?
-                .filter_map(|result| result.ok())
-                .filter(|(key, _)| key.value().len() == 8)
-                .filter_map(|(key, value)| {
-                    let buf = value.value().to_vec();
-                    decode_rkyv!(config::QueuedIndex, &buf)
-                        .ok()
-                        .map(|entry| (key.value().to_vec(), entry))
-                })
-                .take(self.config.max_queue_batch_size)
-                .collect()
+            let mut raw_items = Vec::new();
+            if let Ok(iter) = self.db_queue.iter(&rtxn) {
+                for result in iter {
+                    let (key, value) = match result {
+                        Ok(pair) => pair,
+                        _ => continue,
+                    };
+                    if key.len() != 8 {
+                        continue;
+                    }
+                    match decode_rkyv!(config::QueuedIndex, &value) {
+                        Ok(entry) => raw_items.push((key, entry)),
+                        Err(_) => continue,
+                    }
+                    if raw_items.len() >= self.config.max_queue_batch_size {
+                        break;
+                    }
+                }
+            }
+            raw_items
         };
 
         if items.is_empty() {
             return Ok(());
         }
 
-        let txn = self.db.begin_write()?;
-        {
-            let mut queue = txn.open_table(QUEUE)?;
-            let mut docs = txn.open_table(DOCS)?;
-            let mut inverted = txn.open_table(INVERTED)?;
+        let mut wtxn = self.env.write_txn()?;
 
-            for (key, entry) in &items {
-                let doc = match serde_json::from_slice::<serde_json::Value>(&entry.document) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to deserialize queued document");
-                        queue.remove(key.as_slice())?;
-                        continue;
-                    }
-                };
+        for (key, entry) in &items {
+            let doc = match serde_json::from_slice::<serde_json::Value>(&entry.document) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to deserialize queued document");
+                    self.db_queue.delete(&mut wtxn, key.as_slice())?;
+                    continue;
+                }
+            };
 
-                let meta = match self
-                    .collections
-                    .read()
-                    .unwrap()
-                    .get(&entry.collection)
-                    .cloned()
-                {
-                    Some(m) => m,
-                    None => {
-                        tracing::error!(
-                            collection = %entry.collection,
-                            "queued item references unknown collection"
-                        );
-                        queue.remove(key.as_slice())?;
-                        continue;
-                    }
-                };
+            let meta = match self
+                .collections
+                .read()
+                .unwrap()
+                .get(&entry.collection)
+                .cloned()
+            {
+                Some(m) => m,
+                None => {
+                    tracing::error!(
+                        collection = %entry.collection,
+                        "queued item references unknown collection"
+                    );
+                    self.db_queue.delete(&mut wtxn, key.as_slice())?;
+                    continue;
+                }
+            };
 
-                let content = extract_searchable_content(&doc, &meta.searchable_fields);
-                let new_words = tokenize(&content, self.config.min_token_length);
+            let content = extract_searchable_content(&doc, &meta.searchable_fields);
+            let new_words = tokenize(&content, self.config.min_token_length);
 
-                let doc_key = doc_key(&entry.collection, &entry.id);
-                let old_words = match docs.get(doc_key.as_slice())? {
-                    Some(old_data) => {
-                        if let Ok(old_doc) =
-                            serde_json::from_slice::<serde_json::Value>(old_data.value())
-                        {
-                            let old_content =
-                                extract_searchable_content(&old_doc, &meta.searchable_fields);
-                            tokenize(&old_content, self.config.min_token_length)
-                        } else {
-                            HashSet::new()
-                        }
-                    }
-                    None => HashSet::new(),
-                };
-
-                let is_new = old_words.is_empty();
-
-                if !is_new {
-                    for word in old_words.difference(&new_words) {
-                        match meta.id_type {
-                            IdType::Number => {
-                                let id_u64 = entry.id.parse::<u64>().map_err(|_| {
-                                    AppError::Internal(format!(
-                                        "invalid numeric id in storage: {}",
-                                        entry.id
-                                    ))
-                                })?;
-                                posting_list::remove_from_roaring_posting_list(
-                                    &mut inverted,
-                                    &entry.collection,
-                                    word,
-                                    id_u64,
-                                )?;
-                            }
-                            IdType::String => {
-                                posting_list::remove_from_posting_list(
-                                    &mut inverted,
-                                    &entry.collection,
-                                    word,
-                                    &entry.id,
-                                )?;
-                            }
-                        }
+            let doc_key = doc_key(&entry.collection, &entry.id);
+            let old_words = match self.db_docs.get(&wtxn, doc_key.as_slice())? {
+                Some(old_data) => {
+                    if let Ok(old_doc) =
+                        serde_json::from_slice::<serde_json::Value>(&old_data)
+                    {
+                        let old_content =
+                            extract_searchable_content(&old_doc, &meta.searchable_fields);
+                        tokenize(&old_content, self.config.min_token_length)
+                    } else {
+                        HashSet::new()
                     }
                 }
+                None => HashSet::new(),
+            };
 
-                docs.insert(doc_key.as_slice(), entry.document.as_slice())?;
+            let is_new = old_words.is_empty();
 
-                for word in &new_words {
+            if !is_new {
+                for word in old_words.difference(&new_words) {
                     match meta.id_type {
                         IdType::Number => {
                             let id_u64 = entry.id.parse::<u64>().map_err(|_| {
@@ -392,50 +379,83 @@ impl Store {
                                     entry.id
                                 ))
                             })?;
-                            posting_list::add_to_roaring_posting_list(
-                                &mut inverted,
+                            posting_list::remove_from_roaring_posting_list(
+                                self.db_inverted,
+                                &mut wtxn,
                                 &entry.collection,
                                 word,
                                 id_u64,
-                                self.config.max_roaring_shard_size,
                             )?;
                         }
                         IdType::String => {
-                            posting_list::add_to_posting_list(
-                                &mut inverted,
+                            posting_list::remove_from_posting_list(
+                                self.db_inverted,
+                                &mut wtxn,
                                 &entry.collection,
                                 word,
                                 &entry.id,
-                                self.config.max_string_shard_size,
                             )?;
                         }
                     }
                 }
-
-                queue.remove(key.as_slice())?;
             }
+
+            self.db_docs.put(&mut wtxn, doc_key.as_slice(), entry.document.as_slice())?;
+
+            for word in &new_words {
+                match meta.id_type {
+                    IdType::Number => {
+                        let id_u64 = entry.id.parse::<u64>().map_err(|_| {
+                            AppError::Internal(format!(
+                                "invalid numeric id in storage: {}",
+                                entry.id
+                            ))
+                        })?;
+                        posting_list::add_to_roaring_posting_list(
+                            self.db_inverted,
+                            &mut wtxn,
+                            &entry.collection,
+                            word,
+                            id_u64,
+                            self.config.max_roaring_shard_size,
+                        )?;
+                    }
+                    IdType::String => {
+                        posting_list::add_to_posting_list(
+                            self.db_inverted,
+                            &mut wtxn,
+                            &entry.collection,
+                            word,
+                            &entry.id,
+                            self.config.max_string_shard_size,
+                        )?;
+                    }
+                }
+            }
+
+            self.db_queue.delete(&mut wtxn, key.as_slice())?;
         }
-        txn.commit()?;
+
+        wtxn.commit().map_err(|e| {
+            tracing::error!(error = %e, "failed to commit indexing transaction");
+            AppError::Internal(format!("indexing commit failed: {e}"))
+        })?;
 
         Ok(())
     }
-
     pub fn flush(&self) -> Result<(), AppError> {
         self.process_pending_queue()
     }
 
     pub fn queue_depth(&self) -> Result<u64, AppError> {
-        let txn = self.db.begin_read()?;
-        let Ok(queue) = txn.open_table(QUEUE) else {
-            return Ok(0);
+        let rtxn = match self.env.read_txn() {
+            Ok(t) => t,
+            Err(_) => return Ok(0),
         };
-        let mut count = 0u64;
-        if let Ok(iter) = queue.iter() {
-            for _ in iter {
-                count += 1;
-            }
+        match self.db_queue.len(&rtxn) {
+            Ok(n) => Ok(n),
+            Err(_) => Ok(0),
         }
-        Ok(count)
     }
 
     pub fn spawn_background(self: &std::sync::Arc<Self>) {
@@ -467,15 +487,12 @@ impl Store {
         after: Option<&str>,
     ) -> Result<Vec<serde_json::Value>, AppError> {
         let meta = self.validate_collection_exists(collection)?;
-        let txn = self.db.begin_read()?;
-        let inverted = match txn.open_table(INVERTED) {
-            Ok(t) => t,
-            Err(_) => return Ok(Vec::new()),
-        };
+        let rtxn = self.env.read_txn()?;
 
         let ids = match meta.id_type {
             IdType::Number => search::roaring_search(
-                &inverted,
+                self.db_inverted,
+                &rtxn,
                 collection,
                 self.config.min_token_length,
                 query,
@@ -484,7 +501,8 @@ impl Store {
                 after,
             )?,
             IdType::String => search::string_search(
-                &inverted,
+                self.db_inverted,
+                &rtxn,
                 collection,
                 self.config.min_token_length,
                 query,
@@ -494,18 +512,15 @@ impl Store {
             )?,
         };
 
-        let docs = match txn.open_table(DOCS) {
-            Ok(t) => t,
-            Err(_) => return Ok(Vec::new()),
-        };
         let results: Vec<serde_json::Value> = ids
-            .par_iter()
+            .iter()
             .filter_map(|id| {
                 let key = doc_key(collection, id);
-                docs.get(key.as_slice())
-                    .ok()
-                    .flatten()
-                    .and_then(|data| serde_json::from_slice(data.value()).ok())
+                let doc_data: Vec<u8> = match self.db_docs.get(&rtxn, key.as_slice()) {
+                    Ok(Some(v)) => v,
+                    _ => return None,
+                };
+                serde_json::from_slice(&doc_data).ok()
             })
             .collect();
 
@@ -519,53 +534,51 @@ impl Store {
 
         let _lock = self.lock.lock().unwrap();
 
-        let txn = self.db.begin_write()?;
-        {
-            let mut inverted = txn.open_table(INVERTED)?;
-            let mut docs = txn.open_table(DOCS)?;
+        let mut wtxn = self.env.write_txn()?;
 
-            let doc_key = doc_key(collection, id);
-            let (_doc, tokens) = {
-                let doc_data = docs
-                    .get(doc_key.as_slice())?
-                    .ok_or_else(|| AppError::NotFound(format!("item '{}' not found", id)))?;
-                let doc: serde_json::Value = serde_json::from_slice(doc_data.value())
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
-                let content = extract_searchable_content(&doc, &meta.searchable_fields);
-                let tokens = tokenize(&content, self.config.min_token_length);
-                (doc, tokens)
-            };
+        let doc_key = doc_key(collection, id);
+        let (_doc, tokens) = {
+            let doc_data: Vec<u8> = self.db_docs
+                .get(&wtxn, doc_key.as_slice())?
+                .ok_or_else(|| AppError::NotFound(format!("item '{}' not found", id)))?;
+            let doc: serde_json::Value = serde_json::from_slice(&doc_data)
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            let content = extract_searchable_content(&doc, &meta.searchable_fields);
+            let tokens = tokenize(&content, self.config.min_token_length);
+            (doc, tokens)
+        };
 
-            for word in &tokens {
-                match meta.id_type {
-                    IdType::Number => {
-                        let id_u64 = id.parse::<u64>().map_err(|_| {
-                            AppError::BadRequest(format!(
-                                "invalid id '{}': collection '{}' expects numeric ids",
-                                id, collection
-                            ))
-                        })?;
-                        posting_list::remove_from_roaring_posting_list(
-                            &mut inverted,
-                            collection,
-                            word,
-                            id_u64,
-                        )?;
-                    }
-                    IdType::String => {
-                        posting_list::remove_from_posting_list(
-                            &mut inverted,
-                            collection,
-                            word,
-                            id,
-                        )?;
-                    }
+        for word in &tokens {
+            match meta.id_type {
+                IdType::Number => {
+                    let id_u64 = id.parse::<u64>().map_err(|_| {
+                        AppError::BadRequest(format!(
+                            "invalid id '{}': collection '{}' expects numeric ids",
+                            id, collection
+                        ))
+                    })?;
+                    posting_list::remove_from_roaring_posting_list(
+                        self.db_inverted,
+                        &mut wtxn,
+                        collection,
+                        word,
+                        id_u64,
+                    )?;
+                }
+                IdType::String => {
+                    posting_list::remove_from_posting_list(
+                        self.db_inverted,
+                        &mut wtxn,
+                        collection,
+                        word,
+                        id,
+                    )?;
                 }
             }
-
-            docs.remove(doc_key.as_slice())?;
         }
-        txn.commit()?;
+
+        self.db_docs.delete(&mut wtxn, doc_key.as_slice())?;
+        wtxn.commit()?;
 
         tracing::debug!(collection = %collection, id = %id, "item deleted");
         Ok(())
@@ -574,18 +587,12 @@ impl Store {
     pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
         let meta = self.validate_collection_exists(collection)?;
 
-        let txn = self.db.begin_read()?;
+        let rtxn = self.env.read_txn()?;
         let prefix = doc_prefix(collection);
         let mut count = 0u64;
-        if let Ok(docs) = txn.open_table(DOCS) {
-            let mut end_vec = prefix.clone();
-            end_vec.push(0xFF);
-            for result in docs.range::<&[u8]>(prefix.as_slice()..end_vec.as_slice())? {
-                if result.is_ok() {
-                    count += 1;
-                } else {
-                    break;
-                }
+        if let Ok(iter) = self.db_docs.prefix_iter(&rtxn, prefix.as_slice()) {
+            for _ in iter {
+                count += 1;
             }
         }
 
@@ -598,6 +605,9 @@ impl Store {
     }
 
     pub fn list_collections(&self) -> Result<ListCollectionsResponse, AppError> {
+        if self.collections.read().unwrap().is_empty() {
+            self.refresh_collections_cache()?;
+        }
         let map = self.collections.read().unwrap();
         let collections: Vec<CollectionSummary> = map
             .iter()
@@ -612,26 +622,24 @@ impl Store {
 
     pub fn export_snapshot(&self) -> Result<Vec<u8>, AppError> {
         self.process_pending_queue()?;
-        crate::backup::export_snapshot(&self.db)
+        crate::backup::export_snapshot(&self.env)
     }
 
     pub fn import_snapshot(&self, data: &[u8]) -> Result<(), AppError> {
-        crate::backup::import_snapshot(&self.db, data)?;
+        crate::backup::import_snapshot(&self.env, data)?;
         self.refresh_collections_cache()?;
         Ok(())
     }
 
     fn refresh_collections_cache(&self) -> Result<(), AppError> {
         let mut map = std::collections::HashMap::new();
-        if let Ok(txn) = self.db.begin_read() {
-            if let Ok(meta) = txn.open_table(META) {
-                if let Ok(iter) = meta.iter() {
-                    for (key, value) in iter.flatten() {
-                        let name = key.value().to_string();
-                        let buf = value.value().to_vec();
-                        if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &buf) {
-                            map.insert(name, col_meta);
-                        }
+        if let Ok(rtxn) = self.env.read_txn() {
+            if let Ok(cursor_iter) = self.db_meta.iter(&rtxn) {
+                for result in cursor_iter.flatten() {
+                    let (k, v) = result;
+                    let name = String::from_utf8_lossy(&k).to_string();
+                    if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &v) {
+                        map.insert(name, col_meta);
                     }
                 }
             }
@@ -648,38 +656,31 @@ impl Store {
         self.collections.write().unwrap().remove(collection);
 
         let prefix = doc_prefix(collection);
-        let mut end_vec = prefix.clone();
-        end_vec.push(0xFF);
-        let start = prefix.as_slice();
-        let end = end_vec.as_slice();
 
-        let txn = self.db.begin_write()?;
-        {
-            let mut docs = txn.open_table(DOCS)?;
-            let mut inverted = txn.open_table(INVERTED)?;
-            let mut meta = txn.open_table(META)?;
+        let mut wtxn = self.env.write_txn()?;
 
-            let doc_keys: Vec<Vec<u8>> = docs
-                .range::<&[u8]>(start..end)?
-                .filter_map(|r| r.ok())
-                .map(|(k, _)| k.value().to_vec())
-                .collect();
-            for key in &doc_keys {
-                docs.remove(key.as_slice())?;
-            }
-
-            let inv_keys: Vec<Vec<u8>> = inverted
-                .range::<&[u8]>(start..end)?
-                .filter_map(|r| r.ok())
-                .map(|(k, _)| k.value().to_vec())
-                .collect();
-            for key in &inv_keys {
-                inverted.remove(key.as_slice())?;
-            }
-
-            meta.remove(collection)?;
+        let doc_keys: Vec<Vec<u8>> = self.db_docs
+            .prefix_iter(&wtxn, prefix.as_slice())
+            .unwrap_or_else(|_| panic!("prefix_iter on docs for deletion"))
+            .filter_map(|r| r.ok())
+            .map(|(k, _)| k.to_vec())
+            .collect();
+        for key in &doc_keys {
+            self.db_docs.delete(&mut wtxn, key.as_slice())?;
         }
-        txn.commit()?;
+
+        let inv_keys: Vec<Vec<u8>> = self.db_inverted
+            .prefix_iter(&wtxn, prefix.as_slice())
+            .unwrap_or_else(|_| panic!("prefix_iter on inverted for deletion"))
+            .filter_map(|r| r.ok())
+            .map(|(k, _)| k.to_vec())
+            .collect();
+        for key in &inv_keys {
+            self.db_inverted.delete(&mut wtxn, key.as_slice())?;
+        }
+
+        self.db_meta.delete(&mut wtxn, collection.as_bytes())?;
+        wtxn.commit()?;
 
         tracing::info!(collection = %collection, "collection deleted");
         Ok(())
@@ -708,11 +709,14 @@ mod tests {
 
     fn test_store(conf: StoreConfig) -> (Store, tempfile::TempDir) {
         let dir = tempfile::TempDir::new().unwrap();
-        let db = redb::Database::builder()
-            .set_cache_size(1_000_000)
-            .create(dir.path().join("db"))
-            .unwrap();
-        let store = Store::with_config(db, conf);
+        let env = unsafe {
+            heed::EnvOpenOptions::new()
+                .map_size(10 * 1024 * 1024)
+                .max_dbs(4)
+                .open(dir.path())
+                .unwrap()
+        };
+        let store = Store::with_config(env, conf);
         (store, dir)
     }
 

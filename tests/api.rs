@@ -12,11 +12,14 @@ use tower::ServiceExt;
 
 fn test_app() -> (Router, TempDir, Arc<Store>) {
     let dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("db"))
-        .unwrap();
-    let store = Arc::new(Store::new(db));
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(dir.path())
+            .unwrap()
+    };
+    let store = Arc::new(Store::new(env));
     let auth = aperio::auth::AuthConfig::default();
     let dumps = dir.path().join("dumps");
     std::fs::create_dir_all(&dumps).unwrap();
@@ -29,11 +32,14 @@ fn test_app() -> (Router, TempDir, Arc<Store>) {
 
 fn test_app_no_dumps() -> (Router, TempDir, Arc<Store>) {
     let dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("db"))
-        .unwrap();
-    let store = Arc::new(Store::new(db));
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(dir.path())
+            .unwrap()
+    };
+    let store = Arc::new(Store::new(env));
     let auth = aperio::auth::AuthConfig::default();
     (routes::create_router(store.clone(), auth, None), dir, store)
 }
@@ -601,11 +607,14 @@ async fn export_endpoint_main_key() {
 
     // Verify the file can be imported into a fresh store
     let import_dir = TempDir::new().unwrap();
-    let db = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(import_dir.path().join("db"))
-        .unwrap();
-    let store = Store::new(db);
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(import_dir.path())
+            .unwrap()
+    };
+    let store = Store::new(env);
     let data = std::fs::read(&dumps_path).unwrap();
     store.import_snapshot(&data).unwrap();
 
@@ -621,11 +630,16 @@ async fn export_and_import_roundtrip_via_endpoint() {
     std::fs::create_dir_all(&dumps).unwrap();
 
     // First app (source)
-    let db1 = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("src"))
-        .unwrap();
-    let store1 = Arc::new(Store::new(db1));
+    let src_path = dir.path().join("src");
+    std::fs::create_dir_all(&src_path).unwrap();
+    let env1 = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&src_path)
+            .unwrap()
+    };
+    let store1 = Arc::new(Store::new(env1));
     let auth1 = aperio::auth::AuthConfig::default();
     let app1 = routes::create_router(store1.clone(), auth1, Some(dumps.clone()));
 
@@ -648,11 +662,16 @@ async fn export_and_import_roundtrip_via_endpoint() {
     let file = body["file"].as_str().unwrap().to_string();
 
     // Second app (destination) — uses same dumps folder
-    let db2 = redb::Database::builder()
-        .set_cache_size(1_000_000)
-        .create(dir.path().join("dst"))
-        .unwrap();
-    let store2 = Arc::new(Store::new(db2));
+    let dst_path = dir.path().join("dst");
+    std::fs::create_dir_all(&dst_path).unwrap();
+    let env2 = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&dst_path)
+            .unwrap()
+    };
+    let store2 = Arc::new(Store::new(env2));
     let auth2 = aperio::auth::AuthConfig::default();
     let app2 = routes::create_router(store2, auth2, Some(dumps));
 

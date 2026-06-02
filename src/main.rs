@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() {
     let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "data".to_string());
-    let db_path = PathBuf::from(&data_dir).join("aperio.db");
+    let db_path = PathBuf::from(&data_dir).join("aperio");
 
     let config = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
     let app_config = AppConfig::load(config.as_deref());
@@ -40,14 +40,21 @@ async fn main() {
         "starting aperio"
     );
 
-    let db = redb::Database::create(&db_path).expect("failed to open database");
+    std::fs::create_dir_all(&db_path).expect("failed to create data directory");
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(1024 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&db_path)
+            .expect("failed to open database environment")
+    };
 
     let dumps_folder = app_config.dumps_folder.clone().map(PathBuf::from);
     let main_api_key = app_config.main_api_key.clone();
     let search_api_key = app_config.search_api_key.clone();
 
     let store_config = app_config.merge_into_store_config();
-    let store = Store::with_config(db, store_config);
+    let store = Store::with_config(env, store_config);
     let store = std::sync::Arc::new(store);
     store.spawn_background();
 
