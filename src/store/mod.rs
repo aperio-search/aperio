@@ -131,7 +131,8 @@ impl Store {
                     if let Ok(iter) = meta.iter() {
                         for (key, value) in iter.flatten() {
                             let name = key.value().to_string();
-                            if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
+                            let buf = value.value().to_vec();
+                            if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &buf) {
                                 map.insert(name, col_meta);
                             }
                         }
@@ -283,7 +284,8 @@ impl Store {
                 .filter_map(|result| result.ok())
                 .filter(|(key, _)| key.value().len() == 8)
                 .filter_map(|(key, value)| {
-                    decode_rkyv!(config::QueuedIndex, value.value())
+                    let buf = value.value().to_vec();
+                    decode_rkyv!(config::QueuedIndex, &buf)
                         .ok()
                         .map(|entry| (key.value().to_vec(), entry))
                 })
@@ -626,7 +628,8 @@ impl Store {
                 if let Ok(iter) = meta.iter() {
                     for (key, value) in iter.flatten() {
                         let name = key.value().to_string();
-                        if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
+                        let buf = value.value().to_vec();
+                        if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &buf) {
                             map.insert(name, col_meta);
                         }
                     }
