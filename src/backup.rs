@@ -21,12 +21,36 @@ pub fn export_snapshot(db: &redb::Database) -> Result<Vec<u8>, AppError> {
     buf.write_all(&VERSION.to_le_bytes())?;
     buf.write_all(&TABLE_COUNT.to_le_bytes())?;
 
-    let tables: [(&str, TableDefinition<&[u8], &[u8]>); 4] = [
-        ("meta", META),
+    let tables: [(&str, TableDefinition<&[u8], &[u8]>); 3] = [
         ("queue", QUEUE),
         ("docs", DOCS),
         ("inverted", INVERTED),
     ];
+
+    // Export META separately (uses &str keys)
+    let name = "meta";
+    let name_bytes = name.as_bytes();
+    buf.write_all(&(name_bytes.len() as u16).to_le_bytes())?;
+    buf.write_all(name_bytes)?;
+    let kv_pairs: Vec<(Vec<u8>, Vec<u8>)> = match txn.open_table(META) {
+        Ok(table) => {
+            let mut pairs = Vec::new();
+            if let Ok(iter) = table.iter() {
+                for (key, value) in iter.flatten() {
+                    pairs.push((key.value().as_bytes().to_vec(), value.value().to_vec()));
+                }
+            }
+            pairs
+        }
+        Err(_) => Vec::new(),
+    };
+    buf.write_all(&(kv_pairs.len() as u64).to_le_bytes())?;
+    for (key, value) in &kv_pairs {
+        buf.write_all(&(key.len() as u32).to_le_bytes())?;
+        buf.write_all(key)?;
+        buf.write_all(&(value.len() as u32).to_le_bytes())?;
+        buf.write_all(value)?;
+    }
 
     for (name, table_def) in tables {
         let name_bytes = name.as_bytes();
@@ -37,10 +61,8 @@ pub fn export_snapshot(db: &redb::Database) -> Result<Vec<u8>, AppError> {
             Ok(table) => {
                 let mut pairs = Vec::new();
                 if let Ok(iter) = table.iter() {
-                    for result in iter {
-                        if let Ok((key, value)) = result {
-                            pairs.push((key.value().to_vec(), value.value().to_vec()));
-                        }
+                    for (key, value) in iter.flatten() {
+                        pairs.push((key.value().to_vec(), value.value().to_vec()));
                     }
                 }
                 pairs
@@ -65,11 +87,24 @@ pub fn export_snapshot(db: &redb::Database) -> Result<Vec<u8>, AppError> {
 fn clear_all_tables(db: &redb::Database) -> Result<(), AppError> {
     let txn = db.begin_write()?;
     {
-        for table_def in [META, QUEUE, DOCS, INVERTED] {
+        // META uses &str keys
+        if let Ok(table) = txn.open_table(META) {
+            let keys: Vec<String> = table
+                .iter()?
+                .flatten()
+                .map(|(k, _)| k.value().to_string())
+                .collect();
+            if let Ok(mut table) = txn.open_table(META) {
+                for key in &keys {
+                    table.remove(key.as_str())?;
+                }
+            }
+        }
+        for table_def in [QUEUE, DOCS, INVERTED] {
             if let Ok(mut table) = txn.open_table(table_def) {
                 let keys: Vec<Vec<u8>> = table
                     .iter()?
-                    .filter_map(|r| r.ok())
+                    .flatten()
                     .map(|(k, _)| k.value().to_vec())
                     .collect();
                 for key in &keys {
@@ -130,32 +165,50 @@ pub fn import_snapshot(db: &redb::Database, data: &[u8]) -> Result<(), AppError>
             reader.read_exact(&mut kv_count_buf)?;
             let kv_count = u64::from_le_bytes(kv_count_buf);
 
-            let mut table = match name.as_str() {
-                "meta" => txn.open_table(META)?,
-                "queue" => txn.open_table(QUEUE)?,
-                "docs" => txn.open_table(DOCS)?,
-                "inverted" => txn.open_table(INVERTED)?,
+            match name.as_str() {
+                "meta" => {
+                    let mut table = txn.open_table(META)?;
+                    for _ in 0..kv_count {
+                        let mut kl_buf = [0u8; 4];
+                        reader.read_exact(&mut kl_buf)?;
+                        let key_len = u32::from_le_bytes(kl_buf) as usize;
+                        let mut key = vec![0u8; key_len];
+                        reader.read_exact(&mut key)?;
+                        let key_str = String::from_utf8(key)
+                            .map_err(|_| AppError::BadRequest("invalid meta key".into()))?;
+                        let mut vl_buf = [0u8; 4];
+                        reader.read_exact(&mut vl_buf)?;
+                        let val_len = u32::from_le_bytes(vl_buf) as usize;
+                        let mut value = vec![0u8; val_len];
+                        reader.read_exact(&mut value)?;
+                        table.insert(key_str.as_str(), value.as_slice())?;
+                    }
+                }
+                "queue" | "docs" | "inverted" => {
+                    let def: TableDefinition<&[u8], &[u8]> = match name.as_str() {
+                        "queue" => QUEUE,
+                        "docs" => DOCS,
+                        "inverted" => INVERTED,
+                        _ => unreachable!(),
+                    };
+                    let mut table = txn.open_table(def)?;
+                    for _ in 0..kv_count {
+                        let mut kl_buf = [0u8; 4];
+                        reader.read_exact(&mut kl_buf)?;
+                        let key_len = u32::from_le_bytes(kl_buf) as usize;
+                        let mut key = vec![0u8; key_len];
+                        reader.read_exact(&mut key)?;
+                        let mut vl_buf = [0u8; 4];
+                        reader.read_exact(&mut vl_buf)?;
+                        let val_len = u32::from_le_bytes(vl_buf) as usize;
+                        let mut value = vec![0u8; val_len];
+                        reader.read_exact(&mut value)?;
+                        table.insert(key.as_slice(), value.as_slice())?;
+                    }
+                }
                 _ => {
                     return Err(AppError::BadRequest(format!("unknown table: {name}")));
                 }
-            };
-
-            for _ in 0..kv_count {
-                let mut kl_buf = [0u8; 4];
-                reader.read_exact(&mut kl_buf)?;
-                let key_len = u32::from_le_bytes(kl_buf) as usize;
-
-                let mut key = vec![0u8; key_len];
-                reader.read_exact(&mut key)?;
-
-                let mut vl_buf = [0u8; 4];
-                reader.read_exact(&mut vl_buf)?;
-                let val_len = u32::from_le_bytes(vl_buf) as usize;
-
-                let mut value = vec![0u8; val_len];
-                reader.read_exact(&mut value)?;
-
-                table.insert(key.as_slice(), value.as_slice())?;
             }
         }
     }

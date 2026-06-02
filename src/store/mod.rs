@@ -15,7 +15,7 @@ use crate::models::{
 
 pub use config::{CollectionMeta, IdType, StoreConfig};
 
-pub(crate) const META: TableDefinition<&[u8], &[u8]> = TableDefinition::new("meta");
+pub(crate) const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 pub(crate) const QUEUE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("queue");
 pub(crate) const DOCS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("docs");
 pub(crate) const INVERTED: TableDefinition<&[u8], &[u8]> = TableDefinition::new("inverted");
@@ -129,12 +129,10 @@ impl Store {
             if let Ok(txn) = db.begin_read() {
                 if let Ok(meta) = txn.open_table(META) {
                     if let Ok(iter) = meta.iter() {
-                        for result in iter {
-                            if let Ok((key, value)) = result {
-                                let name = String::from_utf8_lossy(key.value()).to_string();
-                                if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
-                                    map.insert(name, col_meta);
-                                }
+                        for (key, value) in iter.flatten() {
+                            let name = key.value().to_string();
+                            if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
+                                map.insert(name, col_meta);
                             }
                         }
                     }
@@ -233,7 +231,7 @@ impl Store {
             {
                 let mut meta = txn.open_table(META)?;
                 let value = encode_rkyv!(&col_meta)?;
-                meta.insert(name.as_bytes(), value.as_slice())?;
+                meta.insert(name, value.as_slice())?;
             }
             txn.commit()?;
 
@@ -626,12 +624,10 @@ impl Store {
         if let Ok(txn) = self.db.begin_read() {
             if let Ok(meta) = txn.open_table(META) {
                 if let Ok(iter) = meta.iter() {
-                    for result in iter {
-                        if let Ok((key, value)) = result {
-                            let name = String::from_utf8_lossy(key.value()).to_string();
-                            if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
-                                map.insert(name, col_meta);
-                            }
+                    for (key, value) in iter.flatten() {
+                        let name = key.value().to_string();
+                        if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
+                            map.insert(name, col_meta);
                         }
                     }
                 }
@@ -678,7 +674,7 @@ impl Store {
                 inverted.remove(key.as_slice())?;
             }
 
-            meta.remove(collection.as_bytes())?;
+            meta.remove(collection)?;
         }
         txn.commit()?;
 
