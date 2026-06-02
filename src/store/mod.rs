@@ -5,7 +5,7 @@ use std::sync::{Mutex, RwLock};
 
 use charabia::Tokenize;
 use heed::types::Unit;
-use heed::{BytesDecode, BytesEncode, BoxedError};
+use heed::{BoxedError, BytesDecode, BytesEncode};
 use roaring::RoaringTreemap;
 
 use crate::error::AppError;
@@ -209,12 +209,18 @@ impl Store {
         if let Ok(rtxn) = self.env.read_txn() {
             if let Ok(Some(data)) = self.db_meta.get(&rtxn, collection.as_bytes()) {
                 if let Ok(meta) = decode_rkyv!(config::CollectionMeta, &data) {
-                    self.collections.write().unwrap().insert(collection.to_string(), meta.clone());
+                    self.collections
+                        .write()
+                        .unwrap()
+                        .insert(collection.to_string(), meta.clone());
                     return Ok(meta);
                 }
             }
         }
-        Err(AppError::NotFound(format!("collection '{}' not found", collection)))
+        Err(AppError::NotFound(format!(
+            "collection '{}' not found",
+            collection
+        )))
     }
 
     pub fn create_collection(
@@ -252,7 +258,8 @@ impl Store {
 
             let mut wtxn = self.env.write_txn()?;
             let value = encode_rkyv!(&col_meta)?;
-            self.db_meta.put(&mut wtxn, name.as_bytes(), value.as_slice())?;
+            self.db_meta
+                .put(&mut wtxn, name.as_bytes(), value.as_slice())?;
             wtxn.commit()?;
 
             map.insert(name.to_string(), col_meta);
@@ -280,7 +287,11 @@ impl Store {
         };
         let mut wtxn = self.env.write_txn()?;
         let seq_key = seq.to_be_bytes();
-        self.db_queue.put(&mut wtxn, seq_key.as_slice(), encode_rkyv!(&entry)?.as_slice())?;
+        self.db_queue.put(
+            &mut wtxn,
+            seq_key.as_slice(),
+            encode_rkyv!(&entry)?.as_slice(),
+        )?;
         wtxn.commit()?;
         tracing::debug!(collection = %collection, id = %id, seq = %seq, "item queued for indexing");
         Ok(())
@@ -354,9 +365,7 @@ impl Store {
             let doc_key = doc_key(&entry.collection, &entry.id);
             let old_words = match self.db_docs.get(&wtxn, doc_key.as_slice())? {
                 Some(old_data) => {
-                    if let Ok(old_doc) =
-                        serde_json::from_slice::<serde_json::Value>(&old_data)
-                    {
+                    if let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data) {
                         let old_content =
                             extract_searchable_content(&old_doc, &meta.searchable_fields);
                         tokenize(&old_content, self.config.min_token_length)
@@ -400,7 +409,8 @@ impl Store {
                 }
             }
 
-            self.db_docs.put(&mut wtxn, doc_key.as_slice(), entry.document.as_slice())?;
+            self.db_docs
+                .put(&mut wtxn, doc_key.as_slice(), entry.document.as_slice())?;
 
             for word in &new_words {
                 match meta.id_type {
@@ -538,11 +548,12 @@ impl Store {
 
         let doc_key = doc_key(collection, id);
         let (_doc, tokens) = {
-            let doc_data: Vec<u8> = self.db_docs
+            let doc_data: Vec<u8> = self
+                .db_docs
                 .get(&wtxn, doc_key.as_slice())?
                 .ok_or_else(|| AppError::NotFound(format!("item '{}' not found", id)))?;
-            let doc: serde_json::Value = serde_json::from_slice(&doc_data)
-                .map_err(|e| AppError::Internal(e.to_string()))?;
+            let doc: serde_json::Value =
+                serde_json::from_slice(&doc_data).map_err(|e| AppError::Internal(e.to_string()))?;
             let content = extract_searchable_content(&doc, &meta.searchable_fields);
             let tokens = tokenize(&content, self.config.min_token_length);
             (doc, tokens)
@@ -659,7 +670,8 @@ impl Store {
 
         let mut wtxn = self.env.write_txn()?;
 
-        let doc_keys: Vec<Vec<u8>> = self.db_docs
+        let doc_keys: Vec<Vec<u8>> = self
+            .db_docs
             .prefix_iter(&wtxn, prefix.as_slice())
             .unwrap_or_else(|_| panic!("prefix_iter on docs for deletion"))
             .filter_map(|r| r.ok())
@@ -669,7 +681,8 @@ impl Store {
             self.db_docs.delete(&mut wtxn, key.as_slice())?;
         }
 
-        let inv_keys: Vec<Vec<u8>> = self.db_inverted
+        let inv_keys: Vec<Vec<u8>> = self
+            .db_inverted
             .prefix_iter(&wtxn, prefix.as_slice())
             .unwrap_or_else(|_| panic!("prefix_iter on inverted for deletion"))
             .filter_map(|r| r.ok())

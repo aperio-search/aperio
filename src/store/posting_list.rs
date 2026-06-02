@@ -2,14 +2,18 @@ use roaring::RoaringTreemap;
 
 use crate::error::AppError;
 
+use super::DbBytes;
 use super::SHARD_DELIM;
 use super::config::PostingShard;
 use super::roaring_from_slice;
 use super::roaring_to_vec;
-use super::DbBytes;
 
 pub fn shard_key(collection: &str, word: &str, shard: usize) -> Vec<u8> {
-    format!("{}{}{}{}{:04}", collection, SHARD_DELIM, word, SHARD_DELIM, shard).into_bytes()
+    format!(
+        "{}{}{}{}{:04}",
+        collection, SHARD_DELIM, word, SHARD_DELIM, shard
+    )
+    .into_bytes()
 }
 
 fn shard_prefix(collection: &str, word: &str) -> Vec<u8> {
@@ -114,7 +118,11 @@ pub fn add_to_posting_list(
             ids: vec![id.to_string()],
         };
         let value = encode_rkyv!(&shard)?;
-        inverted.put(wtxn, shard_key(collection, word, 0).as_slice(), value.as_slice())?;
+        inverted.put(
+            wtxn,
+            shard_key(collection, word, 0).as_slice(),
+            value.as_slice(),
+        )?;
         return Ok(());
     }
 
@@ -227,7 +235,11 @@ pub fn add_to_roaring_posting_list(
         let mut bitmap = RoaringTreemap::new();
         bitmap.insert(id);
         let value = roaring_to_vec(&bitmap)?;
-        inverted.put(wtxn, shard_key(collection, word, 0).as_slice(), value.as_slice())?;
+        inverted.put(
+            wtxn,
+            shard_key(collection, word, 0).as_slice(),
+            value.as_slice(),
+        )?;
         return Ok(());
     }
 
@@ -246,7 +258,11 @@ pub fn add_to_roaring_posting_list(
         let mut new_bitmap = RoaringTreemap::new();
         new_bitmap.insert(id);
         let value = roaring_to_vec(&new_bitmap)?;
-        inverted.put(wtxn, shard_key(collection, word, last_idx + 1).as_slice(), value.as_slice())?;
+        inverted.put(
+            wtxn,
+            shard_key(collection, word, last_idx + 1).as_slice(),
+            value.as_slice(),
+        )?;
     }
 
     Ok(())

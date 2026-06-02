@@ -2,10 +2,10 @@ use roaring::{MultiOps, RoaringTreemap};
 
 use crate::error::AppError;
 
+use super::DbBytes;
 use super::config::PostingShard;
 use super::roaring_from_slice;
 use super::tokenize;
-use super::DbBytes;
 
 struct WordIterState {
     indices: Vec<usize>,
@@ -64,7 +64,8 @@ pub fn roaring_search(
     let mut word_shards: Vec<(String, Vec<usize>)> = tokens
         .iter()
         .map(|w| {
-            let indices = posting_list::list_shard_indices(inverted, txn, collection, w).unwrap_or_default();
+            let indices =
+                posting_list::list_shard_indices(inverted, txn, collection, w).unwrap_or_default();
             (w.clone(), indices)
         })
         .collect();
@@ -137,7 +138,8 @@ pub fn string_search(
     let mut word_shards: Vec<(String, Vec<usize>)> = tokens
         .iter()
         .map(|w| {
-            let indices = posting_list::list_shard_indices(inverted, txn, collection, w).unwrap_or_default();
+            let indices =
+                posting_list::list_shard_indices(inverted, txn, collection, w).unwrap_or_default();
             (w.clone(), indices)
         })
         .collect();
@@ -161,7 +163,15 @@ pub fn string_search(
 
     if let Some(cursor) = after {
         for (i, (word, _)) in word_shards.iter().enumerate() {
-            skip_past_cursor(inverted, txn, collection, word, cursor, &mut iters[i], sort_desc)?;
+            skip_past_cursor(
+                inverted,
+                txn,
+                collection,
+                word,
+                cursor,
+                &mut iters[i],
+                sort_desc,
+            )?;
         }
     }
 
@@ -202,7 +212,15 @@ pub fn string_search(
         let mut all_have = true;
 
         for (i, state) in iters.iter_mut().enumerate() {
-            seek_to(inverted, txn, collection, &word_shards[i].0, state, &pivot, sort_desc)?;
+            seek_to(
+                inverted,
+                txn,
+                collection,
+                &word_shards[i].0,
+                state,
+                &pivot,
+                sort_desc,
+            )?;
             match state.current() {
                 None => {
                     all_have = false;
@@ -223,7 +241,14 @@ pub fn string_search(
                 break;
             }
             for (i, state) in iters.iter_mut().enumerate() {
-                advance_iter(inverted, txn, collection, &word_shards[i].0, state, sort_desc)?;
+                advance_iter(
+                    inverted,
+                    txn,
+                    collection,
+                    &word_shards[i].0,
+                    state,
+                    sort_desc,
+                )?;
             }
         }
     }
@@ -240,12 +265,10 @@ fn get_shard(
 ) -> Result<Option<PostingShard>, AppError> {
     let key = posting_list::shard_key(collection, word, shard_idx);
     match inverted.get(txn, key.as_slice())? {
-        Some(data) => {
-            match rkyv::from_bytes::<PostingShard, rkyv::rancor::Error>(&data) {
-                Ok(shard) => Ok(Some(shard)),
-                Err(_) => Ok(None),
-            }
-        }
+        Some(data) => match rkyv::from_bytes::<PostingShard, rkyv::rancor::Error>(&data) {
+            Ok(shard) => Ok(Some(shard)),
+            Err(_) => Ok(None),
+        },
         None => Ok(None),
     }
 }
@@ -425,7 +448,8 @@ fn skip_past_cursor(
         return Ok(());
     }
 
-    let shard_idx = posting_list::find_shard_for_id(inverted, txn, collection, word, cursor, &state.indices)?;
+    let shard_idx =
+        posting_list::find_shard_for_id(inverted, txn, collection, word, cursor, &state.indices)?;
     let pos_in_indices = state
         .indices
         .iter()
