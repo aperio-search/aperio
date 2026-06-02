@@ -40,14 +40,7 @@ async fn main() {
         "starting aperio"
     );
 
-    let mut db_builder = fjall::Database::builder(&db_path);
-    if let Some(cache_size) = app_config.block_cache_size {
-        db_builder = db_builder.cache_size(cache_size);
-    }
-    if let Some(threads) = app_config.maintenance_threads {
-        db_builder = db_builder.worker_threads(threads);
-    }
-    let db = db_builder.open().expect("failed to open database");
+    let db = redb::Database::create(&db_path).expect("failed to open database");
 
     let dumps_folder = app_config.dumps_folder.clone().map(PathBuf::from);
     let main_api_key = app_config.main_api_key.clone();

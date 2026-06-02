@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use fjall::PersistMode;
 use rayon::prelude::*;
 
 use charabia::Tokenize;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use roaring::RoaringTreemap;
 
 use crate::error::AppError;
@@ -14,6 +14,11 @@ use crate::models::{
 };
 
 pub use config::{CollectionMeta, IdType, StoreConfig};
+
+pub(crate) const META: TableDefinition<&[u8], &[u8]> = TableDefinition::new("meta");
+pub(crate) const QUEUE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("queue");
+pub(crate) const DOCS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("docs");
+pub(crate) const INVERTED: TableDefinition<&[u8], &[u8]> = TableDefinition::new("inverted");
 
 macro_rules! encode_rkyv {
     ($value:expr) => {{
@@ -106,7 +111,7 @@ mod posting_list;
 mod search;
 
 pub struct Store {
-    db: fjall::Database,
+    db: Database,
     config: StoreConfig,
     lock: Mutex<()>,
     collections: RwLock<HashMap<String, config::CollectionMeta>>,
@@ -114,33 +119,30 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(db: fjall::Database) -> Self {
+    pub fn new(db: Database) -> Self {
         Self::with_config(db, StoreConfig::default())
     }
 
-    pub fn with_config(db: fjall::Database, config: StoreConfig) -> Self {
+    pub fn with_config(db: Database, config: StoreConfig) -> Self {
         let collections = {
             let mut map = HashMap::new();
-            if let Ok(meta) = db.keyspace("_collections", || {
-                config.keyspace_opts(
-                    config.meta_block_size,
-                    0.0,
-                    Some(256 * 1024),
-                    config.collections_compression,
-                )
-            }) {
-                for guard in meta.iter() {
-                    if let Ok((key, value)) = guard.into_inner() {
-                        let name = String::from_utf8_lossy(&key).to_string();
-                        if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &value) {
-                            map.insert(name, col_meta);
+            if let Ok(txn) = db.begin_read() {
+                if let Ok(meta) = txn.open_table(META) {
+                    if let Ok(iter) = meta.iter() {
+                        for result in iter {
+                            if let Ok((key, value)) = result {
+                                let name = String::from_utf8_lossy(key.value()).to_string();
+                                if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
+                                    map.insert(name, col_meta);
+                                }
+                            }
                         }
                     }
                 }
             }
             map
         };
-        let next_seq = Self::init_next_seq(&db, &config);
+        let next_seq = Self::init_next_seq(&db);
 
         Self {
             db,
@@ -151,94 +153,31 @@ impl Store {
         }
     }
 
-    fn init_next_seq(db: &fjall::Database, config: &StoreConfig) -> u64 {
-        let queue = match db.keyspace("_index_queue", || {
-            config.keyspace_opts(
-                config.queue_block_size,
-                0.0,
-                config.index_queue_buffer_size,
-                config.index_queue_compression,
-            )
-        }) {
-            Ok(q) => q,
+    fn init_next_seq(db: &Database) -> u64 {
+        let txn = match db.begin_read() {
+            Ok(t) => t,
+            Err(_) => return 1,
+        };
+        let table = match txn.open_table(QUEUE) {
+            Ok(t) => t,
             Err(_) => return 1,
         };
         let mut max = 0u64;
-        for guard in queue.iter() {
-            if let Ok((key, _)) = guard.into_inner()
-                && key.len() == 8
-            {
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(&key);
-                let seq = u64::from_be_bytes(buf);
-                if seq > max {
-                    max = seq;
+        if let Ok(iter) = table.iter() {
+            for result in iter {
+                if let Ok((key, _)) = result {
+                    if key.value().len() == 8 {
+                        let mut buf = [0u8; 8];
+                        buf.copy_from_slice(key.value());
+                        let seq = u64::from_be_bytes(buf);
+                        if seq > max {
+                            max = seq;
+                        }
+                    }
                 }
             }
         }
         max + 1
-    }
-
-    fn inverted_keyspace(
-        &self,
-        collection: &str,
-        id_type: IdType,
-    ) -> Result<fjall::Keyspace, AppError> {
-        let (block_size, hash_ratio, compression) = match id_type {
-            IdType::Number => (
-                self.config.inverted_roaring_block_size,
-                self.config.inverted_roaring_hash_ratio,
-                self.config.inverted_roaring_compression,
-            ),
-            IdType::String => (
-                self.config.inverted_string_block_size,
-                self.config.inverted_string_hash_ratio,
-                self.config.inverted_string_compression,
-            ),
-        };
-        let name = format!("{}.inverted", collection);
-        Ok(self.db.keyspace(&name, || {
-            self.config.keyspace_opts(
-                block_size,
-                hash_ratio,
-                self.config.inverted_write_buffer_size,
-                compression,
-            )
-        })?)
-    }
-
-    fn docs_keyspace(&self, collection: &str) -> Result<fjall::Keyspace, AppError> {
-        let name = format!("{}.docs", collection);
-        Ok(self.db.keyspace(&name, || {
-            self.config.keyspace_opts(
-                self.config.docs_block_size,
-                self.config.docs_hash_ratio,
-                self.config.docs_buffer_size,
-                self.config.docs_compression,
-            )
-        })?)
-    }
-
-    fn meta_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
-        Ok(self.db.keyspace("_collections", || {
-            self.config.keyspace_opts(
-                self.config.meta_block_size,
-                0.0,
-                Some(256 * 1024),
-                self.config.collections_compression,
-            )
-        })?)
-    }
-
-    fn queue_keyspace(&self) -> Result<fjall::Keyspace, AppError> {
-        Ok(self.db.keyspace("_index_queue", || {
-            self.config.keyspace_opts(
-                self.config.queue_block_size,
-                0.0,
-                self.config.index_queue_buffer_size,
-                self.config.index_queue_compression,
-            )
-        })?)
     }
 
     fn allocate_seq(&self) -> u64 {
@@ -290,9 +229,13 @@ impl Store {
                 searchable_fields: searchable_fields.to_vec(),
             };
 
-            let meta = self.meta_keyspace()?;
-            let value = encode_rkyv!(&col_meta)?;
-            meta.insert(name.as_bytes(), &value)?;
+            let txn = self.db.begin_write()?;
+            {
+                let mut meta = txn.open_table(META)?;
+                let value = encode_rkyv!(&col_meta)?;
+                meta.insert(name.as_bytes(), value.as_slice())?;
+            }
+            txn.commit()?;
 
             map.insert(name.to_string(), col_meta);
         }
@@ -311,82 +254,136 @@ impl Store {
         let id = extract_id(&doc, meta.id_type)?;
 
         let seq = self.allocate_seq();
-        let queue = self.queue_keyspace()?;
         let doc_bytes = serde_json::to_vec(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
         let entry = config::QueuedIndex {
             collection: collection.to_string(),
             id: id.to_string(),
             document: doc_bytes,
         };
-        queue.insert(seq.to_be_bytes(), &encode_rkyv!(&entry)?)?;
+        let txn = self.db.begin_write()?;
+        {
+            let mut queue = txn.open_table(QUEUE)?;
+            let seq_key = seq.to_be_bytes();
+            queue.insert(seq_key.as_slice(), encode_rkyv!(&entry)?.as_slice())?;
+        }
+        txn.commit()?;
         tracing::debug!(collection = %collection, id = %id, seq = %seq, "item queued for indexing");
         Ok(())
     }
 
     pub fn process_pending_queue(&self) -> Result<(), AppError> {
-        let queue = self.queue_keyspace()?;
-        let items: Vec<(Vec<u8>, config::QueuedIndex)> = queue
-            .iter()
-            .filter_map(|guard| guard.into_inner().ok())
-            .filter(|(key, _)| key.len() == 8)
-            .filter_map(|(key, value)| {
-                decode_rkyv!(config::QueuedIndex, &value)
-                    .ok()
-                    .map(|entry| (key.to_vec(), entry))
-            })
-            .take(self.config.max_queue_batch_size)
-            .collect();
-
-        for (key, entry) in &items {
-            let doc = match serde_json::from_slice::<serde_json::Value>(&entry.document) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to deserialize queued document");
-                    queue.remove(key)?;
-                    continue;
-                }
+        let items: Vec<(Vec<u8>, config::QueuedIndex)> = {
+            let txn = match self.db.begin_read() {
+                Ok(t) => t,
+                Err(_) => return Ok(()),
             };
-
-            let meta = match self
-                .collections
-                .read()
-                .unwrap()
-                .get(&entry.collection)
-                .cloned()
-            {
-                Some(m) => m,
-                None => {
-                    tracing::error!(
-                        collection = %entry.collection,
-                        "queued item references unknown collection"
-                    );
-                    queue.remove(key)?;
-                    continue;
-                }
+            let queue = match txn.open_table(QUEUE) {
+                Ok(q) => q,
+                Err(_) => return Ok(()),
             };
+            queue.iter()?
+                .filter_map(|result| result.ok())
+                .filter(|(key, _)| key.value().len() == 8)
+                .filter_map(|(key, value)| {
+                    decode_rkyv!(config::QueuedIndex, value.value())
+                        .ok()
+                        .map(|entry| (key.value().to_vec(), entry))
+                })
+                .take(self.config.max_queue_batch_size)
+                .collect()
+        };
 
-            let inverted = self.inverted_keyspace(&entry.collection, meta.id_type)?;
-            let docs = self.docs_keyspace(&entry.collection)?;
-            let content = extract_searchable_content(&doc, &meta.searchable_fields);
-            let new_words = tokenize(&content, self.config.min_token_length);
+        if items.is_empty() {
+            return Ok(());
+        }
 
-            let old_words = match docs.get(entry.id.as_bytes())? {
-                Some(old_data) => {
-                    if let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data) {
-                        let old_content =
-                            extract_searchable_content(&old_doc, &meta.searchable_fields);
-                        tokenize(&old_content, self.config.min_token_length)
-                    } else {
-                        HashSet::new()
+        let txn = self.db.begin_write()?;
+        {
+            let mut queue = txn.open_table(QUEUE)?;
+            let mut docs = txn.open_table(DOCS)?;
+            let mut inverted = txn.open_table(INVERTED)?;
+
+            for (key, entry) in &items {
+                let doc = match serde_json::from_slice::<serde_json::Value>(&entry.document) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to deserialize queued document");
+                        queue.remove(key.as_slice())?;
+                        continue;
+                    }
+                };
+
+                let meta = match self
+                    .collections
+                    .read()
+                    .unwrap()
+                    .get(&entry.collection)
+                    .cloned()
+                {
+                    Some(m) => m,
+                    None => {
+                        tracing::error!(
+                            collection = %entry.collection,
+                            "queued item references unknown collection"
+                        );
+                        queue.remove(key.as_slice())?;
+                        continue;
+                    }
+                };
+
+                let content = extract_searchable_content(&doc, &meta.searchable_fields);
+                let new_words = tokenize(&content, self.config.min_token_length);
+
+                let doc_key = doc_key(&entry.collection, &entry.id);
+                let old_words = match docs.get(doc_key.as_slice())? {
+                    Some(old_data) => {
+                        if let Ok(old_doc) =
+                            serde_json::from_slice::<serde_json::Value>(old_data.value())
+                        {
+                            let old_content =
+                                extract_searchable_content(&old_doc, &meta.searchable_fields);
+                            tokenize(&old_content, self.config.min_token_length)
+                        } else {
+                            HashSet::new()
+                        }
+                    }
+                    None => HashSet::new(),
+                };
+
+                let is_new = old_words.is_empty();
+
+                if !is_new {
+                    for word in old_words.difference(&new_words) {
+                        match meta.id_type {
+                            IdType::Number => {
+                                let id_u64 = entry.id.parse::<u64>().map_err(|_| {
+                                    AppError::Internal(format!(
+                                        "invalid numeric id in storage: {}",
+                                        entry.id
+                                    ))
+                                })?;
+                                posting_list::remove_from_roaring_posting_list(
+                                    &mut inverted,
+                                    &entry.collection,
+                                    word,
+                                    id_u64,
+                                )?;
+                            }
+                            IdType::String => {
+                                posting_list::remove_from_posting_list(
+                                    &mut inverted,
+                                    &entry.collection,
+                                    word,
+                                    &entry.id,
+                                )?;
+                            }
+                        }
                     }
                 }
-                None => HashSet::new(),
-            };
 
-            let is_new = old_words.is_empty();
+                docs.insert(doc_key.as_slice(), entry.document.as_slice())?;
 
-            if !is_new {
-                for word in old_words.difference(&new_words) {
+                for word in &new_words {
                     match meta.id_type {
                         IdType::Number => {
                             let id_u64 = entry.id.parse::<u64>().map_err(|_| {
@@ -395,50 +392,30 @@ impl Store {
                                     entry.id
                                 ))
                             })?;
-                            posting_list::remove_from_roaring_posting_list(
-                                &inverted, word, id_u64,
+                            posting_list::add_to_roaring_posting_list(
+                                &mut inverted,
+                                &entry.collection,
+                                word,
+                                id_u64,
+                                self.config.max_roaring_shard_size,
                             )?;
                         }
                         IdType::String => {
-                            posting_list::remove_from_posting_list(&inverted, word, &entry.id)?;
+                            posting_list::add_to_posting_list(
+                                &mut inverted,
+                                &entry.collection,
+                                word,
+                                &entry.id,
+                                self.config.max_string_shard_size,
+                            )?;
                         }
                     }
                 }
+
+                queue.remove(key.as_slice())?;
             }
-
-            docs.insert(entry.id.as_bytes(), &entry.document)?;
-
-            for word in &new_words {
-                match meta.id_type {
-                    IdType::Number => {
-                        let id_u64 = entry.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!(
-                                "invalid numeric id in storage: {}",
-                                entry.id
-                            ))
-                        })?;
-                        posting_list::add_to_roaring_posting_list(
-                            &inverted,
-                            word,
-                            id_u64,
-                            self.config.max_roaring_shard_size,
-                        )?;
-                    }
-                    IdType::String => {
-                        posting_list::add_to_posting_list(
-                            &inverted,
-                            word,
-                            &entry.id,
-                            self.config.max_string_shard_size,
-                        )?;
-                    }
-                }
-            }
-
-            queue.remove(key)?;
         }
-
-        self.db.persist(PersistMode::SyncAll)?;
+        txn.commit()?;
 
         Ok(())
     }
@@ -448,8 +425,17 @@ impl Store {
     }
 
     pub fn queue_depth(&self) -> Result<u64, AppError> {
-        let queue = self.queue_keyspace()?;
-        Ok(queue.len()? as u64)
+        let txn = self.db.begin_read()?;
+        let Ok(queue) = txn.open_table(QUEUE) else {
+            return Ok(0);
+        };
+        let mut count = 0u64;
+        if let Ok(iter) = queue.iter() {
+            for _ in iter {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     pub fn spawn_background(self: &std::sync::Arc<Self>) {
@@ -481,10 +467,16 @@ impl Store {
         after: Option<&str>,
     ) -> Result<Vec<serde_json::Value>, AppError> {
         let meta = self.validate_collection_exists(collection)?;
-        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
+        let txn = self.db.begin_read()?;
+        let inverted = match txn.open_table(INVERTED) {
+            Ok(t) => t,
+            Err(_) => return Ok(Vec::new()),
+        };
+
         let ids = match meta.id_type {
             IdType::Number => search::roaring_search(
                 &inverted,
+                collection,
                 self.config.min_token_length,
                 query,
                 sort_desc,
@@ -493,6 +485,7 @@ impl Store {
             )?,
             IdType::String => search::string_search(
                 &inverted,
+                collection,
                 self.config.min_token_length,
                 query,
                 sort_desc,
@@ -501,14 +494,18 @@ impl Store {
             )?,
         };
 
-        let docs = self.docs_keyspace(collection)?;
+        let docs = match txn.open_table(DOCS) {
+            Ok(t) => t,
+            Err(_) => return Ok(Vec::new()),
+        };
         let results: Vec<serde_json::Value> = ids
             .par_iter()
             .filter_map(|id| {
-                docs.get(id.as_bytes())
+                let key = doc_key(collection, id);
+                docs.get(key.as_slice())
                     .ok()
                     .flatten()
-                    .and_then(|data| serde_json::from_slice(&data).ok())
+                    .and_then(|data| serde_json::from_slice(data.value()).ok())
             })
             .collect();
 
@@ -522,45 +519,80 @@ impl Store {
 
         let _lock = self.lock.lock().unwrap();
 
-        let inverted = self.inverted_keyspace(collection, meta.id_type)?;
-        let docs = self.docs_keyspace(collection)?;
+        let txn = self.db.begin_write()?;
+        {
+            let mut inverted = txn.open_table(INVERTED)?;
+            let mut docs = txn.open_table(DOCS)?;
 
-        let doc_data = docs
-            .get(id.as_bytes())?
-            .ok_or_else(|| AppError::NotFound(format!("item '{}' not found", id)))?;
-        let doc: serde_json::Value =
-            serde_json::from_slice(&doc_data).map_err(|e| AppError::Internal(e.to_string()))?;
-        let content = extract_searchable_content(&doc, &meta.searchable_fields);
-        let tokens = tokenize(&content, self.config.min_token_length);
+            let doc_key = doc_key(collection, id);
+            let (_doc, tokens) = {
+                let doc_data = docs
+                    .get(doc_key.as_slice())?
+                    .ok_or_else(|| AppError::NotFound(format!("item '{}' not found", id)))?;
+                let doc: serde_json::Value = serde_json::from_slice(doc_data.value())
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                let content = extract_searchable_content(&doc, &meta.searchable_fields);
+                let tokens = tokenize(&content, self.config.min_token_length);
+                (doc, tokens)
+            };
 
-        for word in &tokens {
-            match meta.id_type {
-                IdType::Number => {
-                    let id_u64 = id.parse::<u64>().map_err(|_| {
-                        AppError::BadRequest(format!(
-                            "invalid id '{}': collection '{}' expects numeric ids",
-                            id, collection
-                        ))
-                    })?;
-                    posting_list::remove_from_roaring_posting_list(&inverted, word, id_u64)?;
+            for word in &tokens {
+                match meta.id_type {
+                    IdType::Number => {
+                        let id_u64 = id.parse::<u64>().map_err(|_| {
+                            AppError::BadRequest(format!(
+                                "invalid id '{}': collection '{}' expects numeric ids",
+                                id, collection
+                            ))
+                        })?;
+                        posting_list::remove_from_roaring_posting_list(
+                            &mut inverted,
+                            collection,
+                            word,
+                            id_u64,
+                        )?;
+                    }
+                    IdType::String => {
+                        posting_list::remove_from_posting_list(
+                            &mut inverted,
+                            collection,
+                            word,
+                            id,
+                        )?;
+                    }
                 }
-                IdType::String => posting_list::remove_from_posting_list(&inverted, word, id)?,
             }
-        }
 
-        docs.remove(id.as_bytes())?;
+            docs.remove(doc_key.as_slice())?;
+        }
+        txn.commit()?;
+
         tracing::debug!(collection = %collection, id = %id, "item deleted");
         Ok(())
     }
 
     pub fn collection_info(&self, collection: &str) -> Result<CollectionInfo, AppError> {
         let meta = self.validate_collection_exists(collection)?;
-        let docs = self.docs_keyspace(collection)?;
+
+        let txn = self.db.begin_read()?;
+        let prefix = doc_prefix(collection);
+        let mut count = 0u64;
+        if let Ok(docs) = txn.open_table(DOCS) {
+            let mut end_vec = prefix.clone();
+            end_vec.push(0xFF);
+            for result in docs.range::<&[u8]>(prefix.as_slice()..end_vec.as_slice())? {
+                if result.is_ok() {
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+        }
 
         Ok(CollectionInfo {
             name: collection.to_string(),
             id_type: format!("{:?}", meta.id_type).to_lowercase(),
-            document_count: docs.len()?,
+            document_count: count as usize,
             searchable_fields: meta.searchable_fields,
         })
     }
@@ -590,13 +622,18 @@ impl Store {
     }
 
     fn refresh_collections_cache(&self) -> Result<(), AppError> {
-        let meta = self.meta_keyspace()?;
         let mut map = std::collections::HashMap::new();
-        for guard in meta.iter() {
-            if let Ok((key, value)) = guard.into_inner() {
-                let name = String::from_utf8_lossy(&key).to_string();
-                if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &value) {
-                    map.insert(name, col_meta);
+        if let Ok(txn) = self.db.begin_read() {
+            if let Ok(meta) = txn.open_table(META) {
+                if let Ok(iter) = meta.iter() {
+                    for result in iter {
+                        if let Ok((key, value)) = result {
+                            let name = String::from_utf8_lossy(key.value()).to_string();
+                            if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, value.value()) {
+                                map.insert(name, col_meta);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -605,54 +642,64 @@ impl Store {
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
-        let meta = self.validate_collection_exists(collection)?;
+        let _meta = self.validate_collection_exists(collection)?;
 
         let _lock = self.lock.lock().unwrap();
 
         self.collections.write().unwrap().remove(collection);
 
-        let inv_name = format!("{}.inverted", collection);
-        if self.db.keyspace_exists(&inv_name) {
-            let (inv_block_size, inv_hash_ratio, inv_compression) = match meta.id_type {
-                IdType::Number => (
-                    self.config.inverted_roaring_block_size,
-                    self.config.inverted_roaring_hash_ratio,
-                    self.config.inverted_roaring_compression,
-                ),
-                IdType::String => (
-                    self.config.inverted_string_block_size,
-                    self.config.inverted_string_hash_ratio,
-                    self.config.inverted_string_compression,
-                ),
-            };
-            let inv = self.db.keyspace(&inv_name, || {
-                self.config.keyspace_opts(
-                    inv_block_size,
-                    inv_hash_ratio,
-                    self.config.inverted_write_buffer_size,
-                    inv_compression,
-                )
-            })?;
-            self.db.delete_keyspace(inv)?;
-        }
-        let docs_name = format!("{}.docs", collection);
-        if self.db.keyspace_exists(&docs_name) {
-            let docs = self.db.keyspace(&docs_name, || {
-                self.config.keyspace_opts(
-                    self.config.docs_block_size,
-                    self.config.docs_hash_ratio,
-                    self.config.docs_buffer_size,
-                    self.config.docs_compression,
-                )
-            })?;
-            self.db.delete_keyspace(docs)?;
-        }
+        let prefix = doc_prefix(collection);
+        let mut end_vec = prefix.clone();
+        end_vec.push(0xFF);
+        let start = prefix.as_slice();
+        let end = end_vec.as_slice();
 
-        let meta = self.meta_keyspace()?;
-        meta.remove(collection.as_bytes())?;
+        let txn = self.db.begin_write()?;
+        {
+            let mut docs = txn.open_table(DOCS)?;
+            let mut inverted = txn.open_table(INVERTED)?;
+            let mut meta = txn.open_table(META)?;
+
+            let doc_keys: Vec<Vec<u8>> = docs
+                .range::<&[u8]>(start..end)?
+                .filter_map(|r| r.ok())
+                .map(|(k, _)| k.value().to_vec())
+                .collect();
+            for key in &doc_keys {
+                docs.remove(key.as_slice())?;
+            }
+
+            let inv_keys: Vec<Vec<u8>> = inverted
+                .range::<&[u8]>(start..end)?
+                .filter_map(|r| r.ok())
+                .map(|(k, _)| k.value().to_vec())
+                .collect();
+            for key in &inv_keys {
+                inverted.remove(key.as_slice())?;
+            }
+
+            meta.remove(collection.as_bytes())?;
+        }
+        txn.commit()?;
+
         tracing::info!(collection = %collection, "collection deleted");
         Ok(())
     }
+}
+
+fn doc_key(collection: &str, doc_id: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(collection.len() + 1 + doc_id.len());
+    key.extend_from_slice(collection.as_bytes());
+    key.push(0);
+    key.extend_from_slice(doc_id.as_bytes());
+    key
+}
+
+fn doc_prefix(collection: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(collection.len() + 1);
+    key.extend_from_slice(collection.as_bytes());
+    key.push(0);
+    key
 }
 
 #[cfg(test)]
@@ -662,9 +709,9 @@ mod tests {
 
     fn test_store(conf: StoreConfig) -> (Store, tempfile::TempDir) {
         let dir = tempfile::TempDir::new().unwrap();
-        let db = fjall::Database::builder(dir.path())
-            .cache_size(1_000_000)
-            .open()
+        let db = redb::Database::builder()
+            .set_cache_size(1_000_000)
+            .create(dir.path().join("db"))
             .unwrap();
         let store = Store::with_config(db, conf);
         (store, dir)
@@ -733,16 +780,16 @@ mod tests {
 
     #[test]
     fn shard_key_format() {
-        let key = posting_list::shard_key("hello", 42);
-        assert_eq!(key, b"hello\x000042");
+        let key = posting_list::shard_key("col", "hello", 42);
+        assert_eq!(key, b"col\x00hello\x000042");
     }
 
     #[test]
     fn shard_key_zero_padded() {
-        let key = posting_list::shard_key("test", 0);
-        assert_eq!(key, b"test\x000000");
-        let key = posting_list::shard_key("test", 9999);
-        assert_eq!(key, b"test\x009999");
+        let key = posting_list::shard_key("col", "test", 0);
+        assert_eq!(key, b"col\x00test\x000000");
+        let key = posting_list::shard_key("col", "test", 9999);
+        assert_eq!(key, b"col\x00test\x009999");
     }
 
     #[test]
@@ -768,22 +815,6 @@ mod tests {
         assert_eq!(cfg.min_token_length, 3);
         assert_eq!(cfg.max_string_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
-        assert!(cfg.inverted_write_buffer_size.is_none());
-        assert!(cfg.docs_buffer_size.is_none());
-        assert!(cfg.index_queue_buffer_size.is_none());
-        assert_eq!(cfg.inverted_roaring_block_size, 16384);
-        assert_eq!(cfg.inverted_string_block_size, 65536);
-        assert_eq!(cfg.docs_block_size, 8192);
-        assert_eq!(cfg.queue_block_size, 32768);
-        assert_eq!(cfg.meta_block_size, 8192);
-        assert!(cfg.docs_compression.is_none());
-        assert!(cfg.inverted_string_compression.is_none());
-        assert!(cfg.inverted_roaring_compression.is_none());
-        assert!(cfg.index_queue_compression.is_none());
-        assert!(cfg.collections_compression.is_none());
-        assert_eq!(cfg.inverted_string_hash_ratio, 8.0);
-        assert_eq!(cfg.inverted_roaring_hash_ratio, 8.0);
-        assert_eq!(cfg.docs_hash_ratio, 8.0);
     }
 
     #[test]

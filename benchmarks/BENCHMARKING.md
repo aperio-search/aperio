@@ -31,7 +31,7 @@ docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" --name aperio ghcr.io/aperio
 
 ```bash
 apt update
-apt instal unzip
+apt install unzip
 curl -fsSL https://bun.sh/install | bash
 source /root/.bashrc
 

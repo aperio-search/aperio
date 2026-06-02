@@ -12,9 +12,9 @@ use tower::ServiceExt;
 
 fn test_app() -> (Router, TempDir, Arc<Store>) {
     let dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("db"))
         .unwrap();
     let store = Arc::new(Store::new(db));
     let auth = aperio::auth::AuthConfig::default();
@@ -29,9 +29,9 @@ fn test_app() -> (Router, TempDir, Arc<Store>) {
 
 fn test_app_no_dumps() -> (Router, TempDir, Arc<Store>) {
     let dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("db"))
         .unwrap();
     let store = Arc::new(Store::new(db));
     let auth = aperio::auth::AuthConfig::default();
@@ -601,9 +601,9 @@ async fn export_endpoint_main_key() {
 
     // Verify the file can be imported into a fresh store
     let import_dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(import_dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(import_dir.path().join("db"))
         .unwrap();
     let store = Store::new(db);
     let data = std::fs::read(&dumps_path).unwrap();
@@ -621,9 +621,9 @@ async fn export_and_import_roundtrip_via_endpoint() {
     std::fs::create_dir_all(&dumps).unwrap();
 
     // First app (source)
-    let db1 = fjall::Database::builder(dir.path().join("src"))
-        .cache_size(1_000_000)
-        .open()
+    let db1 = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("src"))
         .unwrap();
     let store1 = Arc::new(Store::new(db1));
     let auth1 = aperio::auth::AuthConfig::default();
@@ -648,9 +648,9 @@ async fn export_and_import_roundtrip_via_endpoint() {
     let file = body["file"].as_str().unwrap().to_string();
 
     // Second app (destination) — uses same dumps folder
-    let db2 = fjall::Database::builder(dir.path().join("dst"))
-        .cache_size(1_000_000)
-        .open()
+    let db2 = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("dst"))
         .unwrap();
     let store2 = Arc::new(Store::new(db2));
     let auth2 = aperio::auth::AuthConfig::default();

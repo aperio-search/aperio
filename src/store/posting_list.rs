@@ -1,3 +1,4 @@
+use redb::{ReadableTable, Table};
 use roaring::RoaringTreemap;
 
 use crate::error::AppError;
@@ -7,19 +8,30 @@ use super::config::PostingShard;
 use super::roaring_from_slice;
 use super::roaring_to_vec;
 
-pub fn shard_key(word: &str, shard: usize) -> Vec<u8> {
-    format!("{}{}{:04}", word, SHARD_DELIM, shard).into_bytes()
+pub fn shard_key(collection: &str, word: &str, shard: usize) -> Vec<u8> {
+    format!("{}{}{}{}{:04}", collection, SHARD_DELIM, word, SHARD_DELIM, shard).into_bytes()
 }
 
-pub fn load_posting_shard(
-    inverted: &fjall::Keyspace,
+fn shard_prefix(collection: &str, word: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(collection.len() + 1 + word.len() + 1);
+    key.extend_from_slice(collection.as_bytes());
+    key.push(SHARD_DELIM as u8);
+    key.extend_from_slice(word.as_bytes());
+    key.push(SHARD_DELIM as u8);
+    key
+}
+
+pub fn load_posting_shard<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     shard: usize,
 ) -> Result<Option<PostingShard>, AppError> {
-    let key = shard_key(word, shard);
-    match inverted.get(&key)? {
+    let key = shard_key(collection, word, shard);
+    match inverted.get(key.as_slice())? {
         Some(data) => {
-            let shard: PostingShard = decode_rkyv!(PostingShard, &data)
+            let buf = data.value().to_vec();
+            let shard: PostingShard = decode_rkyv!(PostingShard, &buf)
                 .unwrap_or_else(|_| PostingShard { ids: Vec::new() });
             Ok(Some(shard))
         }
@@ -27,11 +39,21 @@ pub fn load_posting_shard(
     }
 }
 
-pub fn list_shard_indices(inverted: &fjall::Keyspace, word: &str) -> Result<Vec<usize>, AppError> {
-    let prefix = format!("{}{}", word, SHARD_DELIM).into_bytes();
+pub fn list_shard_indices<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
+    word: &str,
+) -> Result<Vec<usize>, AppError> {
+    let prefix = shard_prefix(collection, word);
+    let mut end_vec = prefix.clone();
+    end_vec.push(0xFF);
+    let start = prefix.as_slice();
+    let end = end_vec.as_slice();
+
     let mut indices: Vec<usize> = Vec::new();
-    for guard in inverted.prefix(&prefix) {
-        let (key, _) = guard.into_inner()?;
+    for result in inverted.range::<&[u8]>(start..end)? {
+        let (guard, _) = result?;
+        let key = guard.value().to_vec();
         if let Some(null_pos) = key.iter().rposition(|&b| b == SHARD_DELIM as u8) {
             let digit_bytes = &key[null_pos + 1..];
             let mut idx = 0;
@@ -45,8 +67,9 @@ pub fn list_shard_indices(inverted: &fjall::Keyspace, word: &str) -> Result<Vec<
     Ok(indices)
 }
 
-pub fn find_shard_for_id(
-    inverted: &fjall::Keyspace,
+pub fn find_shard_for_id<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     id: &str,
     indices: &[usize],
@@ -55,7 +78,7 @@ pub fn find_shard_for_id(
     let mut hi = indices.len().saturating_sub(1);
     while lo <= hi {
         let mid = (lo + hi) / 2;
-        let shard = match load_posting_shard(inverted, word, indices[mid])? {
+        let shard = match load_posting_shard(inverted, collection, word, indices[mid])? {
             Some(s) => s,
             None => {
                 lo = mid + 1;
@@ -79,24 +102,25 @@ pub fn find_shard_for_id(
 }
 
 pub fn add_to_posting_list(
-    inverted: &fjall::Keyspace,
+    inverted: &mut Table<&[u8], &[u8]>,
+    collection: &str,
     word: &str,
     id: &str,
     max_string_shard_size: usize,
 ) -> Result<(), AppError> {
-    let indices = list_shard_indices(inverted, word)?;
+    let indices = list_shard_indices(inverted, collection, word)?;
 
     if indices.is_empty() {
         let shard = PostingShard {
             ids: vec![id.to_string()],
         };
         let value = encode_rkyv!(&shard)?;
-        inverted.insert(shard_key(word, 0), &value)?;
+        inverted.insert(shard_key(collection, word, 0).as_slice(), value.as_slice())?;
         return Ok(());
     }
 
     let last_idx = *indices.last().unwrap();
-    let last_shard = load_posting_shard(inverted, word, last_idx)?
+    let last_shard = load_posting_shard(inverted, collection, word, last_idx)?
         .unwrap_or_else(|| PostingShard { ids: Vec::new() });
 
     if last_shard
@@ -112,19 +136,25 @@ pub fn add_to_posting_list(
             let mut new_shard = last_shard;
             new_shard.ids.push(id.to_string());
             let new_value = encode_rkyv!(&new_shard)?;
-            inverted.insert(shard_key(word, last_idx), &new_value)?;
+            inverted.insert(
+                shard_key(collection, word, last_idx).as_slice(),
+                new_value.as_slice(),
+            )?;
         } else {
             let shard = PostingShard {
                 ids: vec![id.to_string()],
             };
             let value = encode_rkyv!(&shard)?;
-            inverted.insert(shard_key(word, last_idx + 1), &value)?;
+            inverted.insert(
+                shard_key(collection, word, last_idx + 1).as_slice(),
+                value.as_slice(),
+            )?;
         }
         return Ok(());
     }
 
-    let target = find_shard_for_id(inverted, word, id, &indices)?;
-    let current = load_posting_shard(inverted, word, target)?
+    let target = find_shard_for_id(inverted, collection, word, id, &indices)?;
+    let current = load_posting_shard(inverted, collection, word, target)?
         .unwrap_or_else(|| PostingShard { ids: Vec::new() });
 
     if current.ids.binary_search(&id.to_string()).is_ok() {
@@ -136,23 +166,27 @@ pub fn add_to_posting_list(
     new_shard.ids.insert(pos, id.to_string());
 
     let new_value = encode_rkyv!(&new_shard)?;
-    inverted.insert(shard_key(word, target), &new_value)?;
+    inverted.insert(
+        shard_key(collection, word, target).as_slice(),
+        new_value.as_slice(),
+    )?;
 
     Ok(())
 }
 
 pub fn remove_from_posting_list(
-    inverted: &fjall::Keyspace,
+    inverted: &mut Table<&[u8], &[u8]>,
+    collection: &str,
     word: &str,
     id: &str,
 ) -> Result<(), AppError> {
-    let indices = list_shard_indices(inverted, word)?;
+    let indices = list_shard_indices(inverted, collection, word)?;
     if indices.is_empty() {
         return Ok(());
     }
 
-    let target = find_shard_for_id(inverted, word, id, &indices)?;
-    let current = match load_posting_shard(inverted, word, target)? {
+    let target = find_shard_for_id(inverted, collection, word, id, &indices)?;
+    let current = match load_posting_shard(inverted, collection, word, target)? {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -165,60 +199,62 @@ pub fn remove_from_posting_list(
     let mut new_shard = current;
     new_shard.ids.remove(pos);
 
-    let key = shard_key(word, target);
+    let key = shard_key(collection, word, target);
     if new_shard.ids.is_empty() {
-        inverted.remove(&key)?;
+        inverted.remove(key.as_slice())?;
     } else {
         let new_value = encode_rkyv!(&new_shard)?;
-        inverted.insert(&key, &new_value)?;
+        inverted.insert(key.as_slice(), new_value.as_slice())?;
     }
 
     Ok(())
 }
 
 pub fn add_to_roaring_posting_list(
-    inverted: &fjall::Keyspace,
+    inverted: &mut Table<&[u8], &[u8]>,
+    collection: &str,
     word: &str,
     id: u64,
     max_roaring_shard_size: u64,
 ) -> Result<(), AppError> {
-    let indices = list_shard_indices(inverted, word)?;
+    let indices = list_shard_indices(inverted, collection, word)?;
 
     if indices.is_empty() {
         let mut bitmap = RoaringTreemap::new();
         bitmap.insert(id);
         let value = roaring_to_vec(&bitmap)?;
-        inverted.insert(shard_key(word, 0), &value)?;
+        inverted.insert(shard_key(collection, word, 0).as_slice(), value.as_slice())?;
         return Ok(());
     }
 
     let last_idx = *indices.last().unwrap();
-    let last_key = shard_key(word, last_idx);
-    let mut bitmap: RoaringTreemap = match inverted.get(&last_key)? {
-        Some(data) => roaring_from_slice(&data)?,
+    let last_key = shard_key(collection, word, last_idx);
+    let mut bitmap: RoaringTreemap = match inverted.get(last_key.as_slice())? {
+        Some(guard) => roaring_from_slice(&guard.value().to_vec())?,
         None => RoaringTreemap::new(),
     };
 
     if bitmap.len() < max_roaring_shard_size {
         bitmap.insert(id);
         let value = roaring_to_vec(&bitmap)?;
-        inverted.insert(&last_key, &value)?;
+        inverted.insert(last_key.as_slice(), value.as_slice())?;
     } else {
         let mut new_bitmap = RoaringTreemap::new();
         new_bitmap.insert(id);
         let value = roaring_to_vec(&new_bitmap)?;
-        inverted.insert(shard_key(word, last_idx + 1), &value)?;
+        inverted.insert(shard_key(collection, word, last_idx + 1).as_slice(), value.as_slice())?;
     }
 
     Ok(())
 }
 
 pub fn remove_from_roaring_posting_list(
-    inverted: &fjall::Keyspace,
+    inverted: &mut Table<&[u8], &[u8]>,
+    collection: &str,
     word: &str,
     id: u64,
 ) -> Result<(), AppError> {
-    let indices = list_shard_indices(inverted, word)?;
+    let indices = list_shard_indices(inverted, collection, word)?;
     if indices.is_empty() {
         return Ok(());
     }
@@ -231,9 +267,9 @@ pub fn remove_from_roaring_posting_list(
                 break indices[lo.min(indices.len().saturating_sub(1))];
             }
             let mid = (lo + hi) / 2;
-            let key = shard_key(word, indices[mid]);
-            let data = match inverted.get(&key)? {
-                Some(d) => d,
+            let key = shard_key(collection, word, indices[mid]);
+            let data = match inverted.get(key.as_slice())? {
+                Some(d) => d.value().to_vec(),
                 None => {
                     lo = mid + 1;
                     continue;
@@ -255,9 +291,9 @@ pub fn remove_from_roaring_posting_list(
         }
     };
 
-    let key = shard_key(word, target);
-    let data = match inverted.get(&key)? {
-        Some(d) => d,
+    let key = shard_key(collection, word, target);
+    let data = match inverted.get(key.as_slice())? {
+        Some(d) => d.value().to_vec(),
         None => return Ok(()),
     };
 
@@ -269,10 +305,10 @@ pub fn remove_from_roaring_posting_list(
     bitmap.remove(id);
 
     if bitmap.is_empty() {
-        inverted.remove(&key)?;
+        inverted.remove(key.as_slice())?;
     } else {
         let value = roaring_to_vec(&bitmap)?;
-        inverted.insert(&key, &value)?;
+        inverted.insert(key.as_slice(), value.as_slice())?;
     }
 
     Ok(())

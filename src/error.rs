@@ -34,8 +34,38 @@ impl IntoResponse for AppError {
     }
 }
 
-impl From<fjall::Error> for AppError {
-    fn from(e: fjall::Error) -> Self {
+impl From<redb::Error> for AppError {
+    fn from(e: redb::Error) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<redb::DatabaseError> for AppError {
+    fn from(e: redb::DatabaseError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<redb::TableError> for AppError {
+    fn from(e: redb::TableError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<redb::StorageError> for AppError {
+    fn from(e: redb::StorageError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<redb::CommitError> for AppError {
+    fn from(e: redb::CommitError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
+
+impl From<redb::TransactionError> for AppError {
+    fn from(e: redb::TransactionError) -> Self {
         AppError::Internal(e.to_string())
     }
 }
@@ -73,13 +103,6 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = body_to_json(resp);
         assert_eq!(body["error"], "invalid");
-    }
-
-    #[test]
-    fn from_fjall_error() {
-        let fjall_err: fjall::Error = std::io::Error::other("db error").into();
-        let err: AppError = fjall_err.into();
-        assert!(matches!(err, AppError::Internal(_)));
     }
 
     #[test]

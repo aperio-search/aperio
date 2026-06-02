@@ -6,9 +6,9 @@ use tempfile::TempDir;
 
 fn create_store() -> (Store, TempDir) {
     let dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("db"))
         .unwrap();
     let store = Store::new(db);
     (store, dir)
@@ -16,9 +16,9 @@ fn create_store() -> (Store, TempDir) {
 
 fn create_store_with_config(config: StoreConfig) -> (Store, TempDir) {
     let dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("db"))
         .unwrap();
     let store = Store::with_config(db, config);
     (store, dir)
@@ -303,10 +303,11 @@ fn delete_all_items_in_collection() {
 #[test]
 fn persist_and_reopen() {
     let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("db");
 
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(&db_path)
         .unwrap();
     let store = Store::new(db);
     store
@@ -318,9 +319,9 @@ fn persist_and_reopen() {
     store.flush().unwrap();
     drop(store);
 
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(&db_path)
         .unwrap();
     let store = Store::new(db);
     let results = store.search("docs", "hello", false, 10, None).unwrap();
@@ -336,9 +337,9 @@ fn export_import_roundtrip() {
 
     // Seed source
     let src_path = dir.path().join("src");
-    let db = fjall::Database::builder(&src_path)
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(&src_path)
         .unwrap();
     let store = Store::new(db);
     store
@@ -352,16 +353,16 @@ fn export_import_roundtrip() {
         .unwrap();
     store.flush().unwrap();
 
-    // Export via Store method (uses snapshot internally)
+    // Export via Store method
     let data = store.export_snapshot().unwrap();
     assert!(!data.is_empty(), "export data should not be empty");
     drop(store);
 
     // Import into a fresh store
     let dst_path = dir.path().join("dst");
-    let db = fjall::Database::builder(&dst_path)
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(&dst_path)
         .unwrap();
     let store = Store::new(db);
     store.import_snapshot(&data).unwrap();
@@ -383,9 +384,9 @@ fn export_import_roundtrip() {
 #[test]
 fn export_empty_database() {
     let dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("db"))
         .unwrap();
     let store = Store::new(db);
     let data = store.export_snapshot().unwrap();
@@ -401,9 +402,9 @@ fn export_import_number_collection() {
     let dir = TempDir::new().unwrap();
 
     let src_path = dir.path().join("src");
-    let db = fjall::Database::builder(&src_path)
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(&src_path)
         .unwrap();
     let store = Store::new(db);
     store
@@ -421,9 +422,9 @@ fn export_import_number_collection() {
     drop(store);
 
     let dst_path = dir.path().join("dst");
-    let db = fjall::Database::builder(&dst_path)
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(&dst_path)
         .unwrap();
     let store = Store::new(db);
     store.import_snapshot(&data).unwrap();
@@ -440,9 +441,9 @@ fn export_import_number_collection() {
 #[test]
 fn export_import_bad_magic() {
     let dir = TempDir::new().unwrap();
-    let db = fjall::Database::builder(dir.path())
-        .cache_size(1_000_000)
-        .open()
+    let db = redb::Database::builder()
+        .set_cache_size(1_000_000)
+        .create(dir.path().join("db"))
         .unwrap();
     let store = Store::new(db);
     let err = store.import_snapshot(b"garbage data").unwrap_err();

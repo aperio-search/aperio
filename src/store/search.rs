@@ -1,17 +1,17 @@
-use fjall::Slice;
 use rayon::prelude::*;
+use redb::ReadableTable;
 use roaring::{MultiOps, RoaringTreemap};
 
 use crate::error::AppError;
 
-use super::config::ArchivedPostingShard;
+use super::config::PostingShard;
 use super::roaring_from_slice;
 use super::tokenize;
 
 struct WordIterState {
     indices: Vec<usize>,
     shard_pos: isize,
-    cur_slice: Option<Slice>,
+    cur_shard: Option<PostingShard>,
     cur_pos: usize,
 }
 
@@ -25,32 +25,29 @@ impl WordIterState {
         Self {
             indices,
             shard_pos,
-            cur_slice: None,
+            cur_shard: None,
             cur_pos: 0,
         }
     }
 
-    fn current_archived(&self) -> Option<&ArchivedPostingShard> {
-        rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(self.cur_slice.as_deref()?).ok()
-    }
-
     fn current(&self) -> Option<&str> {
-        let archived = self.current_archived()?;
-        if self.cur_pos >= archived.ids.len() {
+        let ids = &self.cur_shard.as_ref()?.ids;
+        if self.cur_pos >= ids.len() {
             return None;
         }
-        archived.ids.get(self.cur_pos).map(|s| s.as_str())
+        ids.get(self.cur_pos).map(|s| s.as_str())
     }
 
     fn ids_len(&self) -> usize {
-        self.current_archived().map(|a| a.ids.len()).unwrap_or(0)
+        self.cur_shard.as_ref().map(|s| s.ids.len()).unwrap_or(0)
     }
 }
 
 use super::posting_list;
 
-pub fn roaring_search(
-    inverted: &fjall::Keyspace,
+pub fn roaring_search<T: ReadableTable<&'static [u8], &'static [u8]> + Sync>(
+    inverted: &T,
+    collection: &str,
     config_min_token_length: usize,
     query: &str,
     sort_desc: bool,
@@ -67,7 +64,7 @@ pub fn roaring_search(
     let mut word_shards: Vec<(String, Vec<usize>)> = tokens
         .par_iter()
         .map(|w| {
-            let indices = posting_list::list_shard_indices(inverted, w).unwrap_or_default();
+            let indices = posting_list::list_shard_indices(inverted, collection, w).unwrap_or_default();
             (w.clone(), indices)
         })
         .collect();
@@ -81,11 +78,11 @@ pub fn roaring_search(
         .map(|(word, indices)| -> Result<RoaringTreemap, AppError> {
             let mut word_bitmap = RoaringTreemap::new();
             for &shard_idx in indices {
-                let key = posting_list::shard_key(word, shard_idx);
-                if let Some(data) = inverted.get(&key)?
-                    && let Ok(bitmap) = roaring_from_slice(&data)
-                {
-                    word_bitmap |= &bitmap;
+                let key = posting_list::shard_key(collection, word, shard_idx);
+                if let Some(guard) = inverted.get(key.as_slice())? {
+                    if let Ok(bitmap) = roaring_from_slice(guard.value()) {
+                        word_bitmap |= &bitmap;
+                    }
                 }
             }
             Ok(word_bitmap)
@@ -120,8 +117,9 @@ pub fn roaring_search(
     Ok(results)
 }
 
-pub fn string_search(
-    inverted: &fjall::Keyspace,
+pub fn string_search<T: ReadableTable<&'static [u8], &'static [u8]> + Sync>(
+    inverted: &T,
+    collection: &str,
     config_min_token_length: usize,
     query: &str,
     sort_desc: bool,
@@ -138,7 +136,7 @@ pub fn string_search(
     let mut word_shards: Vec<(String, Vec<usize>)> = tokens
         .par_iter()
         .map(|w| {
-            let indices = posting_list::list_shard_indices(inverted, w).unwrap_or_default();
+            let indices = posting_list::list_shard_indices(inverted, collection, w).unwrap_or_default();
             (w.clone(), indices)
         })
         .collect();
@@ -152,9 +150,9 @@ pub fn string_search(
         .map(|(word, indices)| -> Result<WordIterState, AppError> {
             let mut state = WordIterState::new(indices.clone(), sort_desc);
             if !sort_desc {
-                load_first_shard(inverted, word, &mut state)?;
+                load_first_shard(inverted, collection, word, &mut state)?;
             } else {
-                load_last_shard(inverted, word, &mut state)?;
+                load_last_shard(inverted, collection, word, &mut state)?;
             }
             Ok(state)
         })
@@ -162,7 +160,7 @@ pub fn string_search(
 
     if let Some(cursor) = after {
         for (i, (word, _)) in word_shards.iter().enumerate() {
-            skip_past_cursor(inverted, word, cursor, &mut iters[i], sort_desc)?;
+            skip_past_cursor(inverted, collection, word, cursor, &mut iters[i], sort_desc)?;
         }
     }
 
@@ -203,7 +201,7 @@ pub fn string_search(
         let mut all_have = true;
 
         for (i, state) in iters.iter_mut().enumerate() {
-            seek_to(inverted, &word_shards[i].0, state, &pivot, sort_desc)?;
+            seek_to(inverted, collection, &word_shards[i].0, state, &pivot, sort_desc)?;
             match state.current() {
                 None => {
                     all_have = false;
@@ -224,7 +222,7 @@ pub fn string_search(
                 break;
             }
             for (i, state) in iters.iter_mut().enumerate() {
-                advance_iter(inverted, &word_shards[i].0, state, sort_desc)?;
+                advance_iter(inverted, collection, &word_shards[i].0, state, sort_desc)?;
             }
         }
     }
@@ -232,58 +230,73 @@ pub fn string_search(
     Ok(results)
 }
 
-fn load_first_shard(
-    inverted: &fjall::Keyspace,
+fn get_shard<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
+    word: &str,
+    shard_idx: usize,
+) -> Result<Option<PostingShard>, AppError> {
+    let key = posting_list::shard_key(collection, word, shard_idx);
+    match inverted.get(key.as_slice())? {
+        Some(guard) => {
+            let bytes = guard.value().to_vec();
+            match rkyv::from_bytes::<PostingShard, rkyv::rancor::Error>(&bytes) {
+                Ok(shard) => Ok(Some(shard)),
+                Err(_) => Ok(None),
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn load_first_shard<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     state: &mut WordIterState,
 ) -> Result<(), AppError> {
     while (state.shard_pos as usize) < state.indices.len() {
         let idx = state.indices[state.shard_pos as usize];
-        let key = posting_list::shard_key(word, idx);
-        if let Some(data) = inverted.get(&key)? {
-            let non_empty = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
-                .map(|a| !a.ids.is_empty())
-                .unwrap_or(false);
-            if non_empty {
-                state.cur_slice = Some(data);
+        if let Some(shard) = get_shard(inverted, collection, word, idx)? {
+            if !shard.ids.is_empty() {
+                state.cur_shard = Some(shard);
                 state.cur_pos = 0;
                 return Ok(());
             }
         }
         state.shard_pos += 1;
     }
-    state.cur_slice = None;
+    state.cur_shard = None;
     state.cur_pos = 0;
     Ok(())
 }
 
-fn load_last_shard(
-    inverted: &fjall::Keyspace,
+fn load_last_shard<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     state: &mut WordIterState,
 ) -> Result<(), AppError> {
     while state.shard_pos >= 0 {
         let idx = state.indices[state.shard_pos as usize];
-        let key = posting_list::shard_key(word, idx);
-        if let Some(data) = inverted.get(&key)? {
-            let maybe_len = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
-                .map(|a| a.ids.len())
-                .unwrap_or(0);
-            if maybe_len > 0 {
-                state.cur_slice = Some(data);
+        if let Some(shard) = get_shard(inverted, collection, word, idx)? {
+            if !shard.ids.is_empty() {
+                let maybe_len = shard.ids.len();
+                state.cur_shard = Some(shard);
                 state.cur_pos = maybe_len.saturating_sub(1);
                 return Ok(());
             }
         }
         state.shard_pos -= 1;
     }
-    state.cur_slice = None;
+    state.cur_shard = None;
     state.cur_pos = 0;
     Ok(())
 }
 
-fn advance_shard(
-    inverted: &fjall::Keyspace,
+fn advance_shard<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     state: &mut WordIterState,
     desc: bool,
@@ -292,26 +305,23 @@ fn advance_shard(
         if desc {
             state.shard_pos -= 1;
             if state.shard_pos < 0 {
-                state.cur_slice = None;
+                state.cur_shard = None;
                 state.cur_pos = 0;
                 return Ok(());
             }
         } else {
             state.shard_pos += 1;
             if (state.shard_pos as usize) >= state.indices.len() {
-                state.cur_slice = None;
+                state.cur_shard = None;
                 state.cur_pos = 0;
                 return Ok(());
             }
         }
         let idx = state.indices[state.shard_pos as usize];
-        let key = posting_list::shard_key(word, idx);
-        if let Some(data) = inverted.get(&key)? {
-            let maybe_len = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
-                .map(|a| a.ids.len())
-                .unwrap_or(0);
-            if maybe_len > 0 {
-                state.cur_slice = Some(data);
+        if let Some(shard) = get_shard(inverted, collection, word, idx)? {
+            if !shard.ids.is_empty() {
+                let maybe_len = shard.ids.len();
+                state.cur_shard = Some(shard);
                 state.cur_pos = if desc { maybe_len.saturating_sub(1) } else { 0 };
                 return Ok(());
             }
@@ -319,28 +329,30 @@ fn advance_shard(
     }
 }
 
-fn advance_iter(
-    inverted: &fjall::Keyspace,
+fn advance_iter<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     state: &mut WordIterState,
     desc: bool,
 ) -> Result<(), AppError> {
     if desc {
         if state.cur_pos == 0 {
-            return advance_shard(inverted, word, state, desc);
+            return advance_shard(inverted, collection, word, state, desc);
         }
         state.cur_pos -= 1;
     } else {
         state.cur_pos += 1;
         if state.cur_pos >= state.ids_len() {
-            return advance_shard(inverted, word, state, desc);
+            return advance_shard(inverted, collection, word, state, desc);
         }
     }
     Ok(())
 }
 
-fn seek_to(
-    inverted: &fjall::Keyspace,
+fn seek_to<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     state: &mut WordIterState,
     target: &str,
@@ -357,8 +369,7 @@ fn seek_to(
             }
         }
 
-        if let Some(archived) = state.current_archived() {
-            let ids = &archived.ids;
+        if let Some(ids) = state.cur_shard.as_ref().map(|s| &s.ids) {
             let len = ids.len();
             if desc {
                 let mut lo = 0usize;
@@ -391,12 +402,13 @@ fn seek_to(
             }
         }
 
-        advance_shard(inverted, word, state, desc)?;
+        advance_shard(inverted, collection, word, state, desc)?;
     }
 }
 
-fn skip_past_cursor(
-    inverted: &fjall::Keyspace,
+fn skip_past_cursor<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    inverted: &T,
+    collection: &str,
     word: &str,
     cursor: &str,
     state: &mut WordIterState,
@@ -406,7 +418,7 @@ fn skip_past_cursor(
         return Ok(());
     }
 
-    let shard_idx = posting_list::find_shard_for_id(inverted, word, cursor, &state.indices)?;
+    let shard_idx = posting_list::find_shard_for_id(inverted, collection, word, cursor, &state.indices)?;
     let pos_in_indices = state
         .indices
         .iter()
@@ -414,39 +426,28 @@ fn skip_past_cursor(
         .unwrap_or(state.indices.len().saturating_sub(1));
     state.shard_pos = pos_in_indices as isize;
 
-    let key = posting_list::shard_key(word, shard_idx);
-    match inverted.get(&key)? {
-        Some(data) => {
-            let (pos, ids_len) =
-                match rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data) {
-                    Ok(archived) => {
-                        let ids = &archived.ids;
-                        let mut lo = 0;
-                        let mut hi = ids.len();
-                        while lo < hi {
-                            let mid = (lo + hi) / 2;
-                            match ids.get(mid) {
-                                Some(s) if s.as_str() < cursor => {
-                                    lo = mid + 1;
-                                }
-                                _ => {
-                                    hi = mid;
-                                }
-                            }
-                        }
-                        (lo, ids.len())
+    match get_shard(inverted, collection, word, shard_idx)? {
+        Some(shard) => {
+            let ids = &shard.ids;
+            let mut lo = 0;
+            let mut hi = ids.len();
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                match ids.get(mid) {
+                    Some(s) if s.as_str() < cursor => {
+                        lo = mid + 1;
                     }
-                    Err(_) => {
-                        state.cur_slice = None;
-                        state.cur_pos = 0;
-                        return Ok(());
+                    _ => {
+                        hi = mid;
                     }
-                };
-            state.cur_slice = Some(data);
-            state.cur_pos = pos.min(ids_len.saturating_sub(1));
+                }
+            }
+            let ids_len = ids.len();
+            state.cur_shard = Some(shard);
+            state.cur_pos = lo.min(ids_len.saturating_sub(1));
         }
         None => {
-            state.cur_slice = None;
+            state.cur_shard = None;
             state.cur_pos = 0;
             return Ok(());
         }
@@ -459,7 +460,7 @@ fn skip_past_cursor(
             Some(id) => {
                 let should_skip = if desc { id >= cursor } else { id <= cursor };
                 if should_skip {
-                    advance_iter(inverted, word, state, desc)?;
+                    advance_iter(inverted, collection, word, state, desc)?;
                 } else {
                     break;
                 }
