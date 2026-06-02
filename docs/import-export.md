@@ -1,6 +1,6 @@
 # Import & Export
 
-Aperio provides two HTTP endpoints to create portable snapshots of the entire search index and restore them later. Both use `fjall::Snapshot` internally, so they produce a point-in-time consistent view without blocking concurrent writes.
+Aperio provides two HTTP endpoints to create portable snapshots of the entire search index and restore them later. Both use a custom binary format that iterates all key-value pairs in each of the four LMDB databases (`meta`, `queue`, `docs`, `inverted`) from a read transaction, producing a point-in-time consistent view without blocking concurrent writes.
 
 > **Auth required**: `Authorization: <main_api_key>` header.
 

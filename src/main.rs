@@ -40,21 +40,21 @@ async fn main() {
         "starting aperio"
     );
 
-    let mut db_builder = fjall::Database::builder(&db_path);
-    if let Some(cache_size) = app_config.block_cache_size {
-        db_builder = db_builder.cache_size(cache_size);
-    }
-    if let Some(threads) = app_config.maintenance_threads {
-        db_builder = db_builder.worker_threads(threads);
-    }
-    let db = db_builder.open().expect("failed to open database");
+    std::fs::create_dir_all(&db_path).expect("failed to create data directory");
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(1024 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&db_path)
+            .expect("failed to open database environment")
+    };
 
     let dumps_folder = app_config.dumps_folder.clone().map(PathBuf::from);
     let main_api_key = app_config.main_api_key.clone();
     let search_api_key = app_config.search_api_key.clone();
 
     let store_config = app_config.merge_into_store_config();
-    let store = Store::with_config(db, store_config);
+    let store = Store::with_config(env, store_config);
     let store = std::sync::Arc::new(store);
     store.spawn_background();
 

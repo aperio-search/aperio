@@ -2,7 +2,7 @@
 
 ## First-read warning
 
-**The README is stale.** It says "sled" everywhere. The code uses **fjall** 3.x (LSM-tree). Treat README as conceptual reference only; the source in `src/` is the source of truth.
+Treat README as conceptual reference only; the source in `src/` is the source of truth.
 
 ## Project structure
 
@@ -10,13 +10,13 @@ Single-crate Rust project (`aperio`). No workspace, no sub-crates.
 
 ```
 src/
-  main.rs       — entrypoint, reads DATA_DIR / CONFIG_FILE env vars, opens fjall DB, binds :3000
+  main.rs       — entrypoint, reads DATA_DIR / CONFIG_FILE env vars, opens LMDB env, binds :3000
   lib.rs        — pub mod config, models, error, routes, store
   config.rs     — optional TOML config file parsing
   routes.rs     — Axum router with REST endpoints
-  store.rs      — core engine: tokenization, inverted index, two ID strategies
+  store/mod.rs  — core engine: tokenization, inverted index, two ID strategies
 tests/
-  store.rs      — store integration tests (real fjall DB in tempdir)
+  store.rs      — store integration tests (real LMDB env in tempdir)
   api.rs        — HTTP API integration tests via tower::ServiceExt
 ```
 
@@ -101,7 +101,7 @@ All tests use the same dev-dependencies:
 
 Key patterns:
 
-- **Store unit tests** create a real `fjall::Database` in a `tempfile::TempDir` and construct a `Store` with it. The `TempDir` is kept alive alongside the `Store` so it isn't dropped early.
+- **Store unit tests** create a real `heed::Env` in a `tempfile::TempDir` and construct a `Store` with it. The `TempDir` is kept alive alongside the `Store` so it isn't dropped early.
 - **API tests** use `tower::ServiceExt::oneshot` on a cloned `axum::Router` (the router is cheap to clone; `oneshot` takes ownership).
 - **Config tests** use `tempfile::NamedTempFile` to exercise the file-read path.
 - **Error tests** use `tokio::runtime::Runtime::new().block_on()` to read response bodies synchronously.

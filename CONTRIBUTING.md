@@ -5,7 +5,7 @@ Thank you for your interest in contributing! This document covers the workflow a
 ## Getting Started
 
 - **Rust toolchain:** pinned to `1.96` via `rust-toolchain.toml` — it will be installed automatically by rustup.
-- **No external services.** Aperio runs entirely locally with `fjall` for storage. Just clone and build.
+- **No external services.** Aperio runs entirely locally with LMDB (via `heed`) for storage. Just clone and build.
 
 ```sh
 cargo check
@@ -55,15 +55,16 @@ cd docs && npm install && npm run docs:dev
 
 ```
 src/
-  main.rs       — entrypoint, reads env vars, opens fjall DB, binds :3000
+  main.rs       — entrypoint, reads env vars, opens LMDB env, binds :3000
   lib.rs        — pub mod declarations
   auth.rs       — API key authentication middleware
   backup.rs     — snapshot export/import
   config.rs     — optional TOML config parsing
   routes.rs     — Axum router with REST endpoints
-  store/        — core engine: tokenization, inverted index, two ID strategies (mod.rs, config.rs, posting_list.rs, search.rs)
+  store/        — core engine: tokenization, inverted index, two ID strategies
+    (mod.rs, config.rs, posting_list.rs, search.rs)
 tests/
-  store.rs      — store integration tests (real fjall DB in tempdir)
+  store.rs      — store integration tests (real LMDB env in tempdir)
   api.rs        — HTTP API integration tests via tower::ServiceExt
 ```
 

@@ -16,9 +16,9 @@
 ├───────────────────────────────────────────────────┤
 │    Auth (src/auth.rs)  ·  Backup (src/backup.rs)  │
 ├───────────────────────────────────────────────────┤
-│            fjall LSM-tree Database                │
-│        Keyspaces: _collections, _index_queue,     │
-│           {col}.inverted, {col}.docs              │
+│               LMDB Database (heed)                │
+│        Databases: meta, queue, docs, inverted     │
+│      (collection-prefixed keys, e.g. "col\0key")  │
 └───────────────────────────────────────────────────┘
 ```
 
@@ -27,7 +27,7 @@ The server has four layers:
 1. **HTTP Layer** — Axum router exposing REST endpoints.
 2. **Auth & Backup** — API key authentication (`src/auth.rs`) and snapshot export/import (`src/backup.rs`).
 3. **Store Engine** — Core logic: tokenization, inverted index management, search/insert (`src/store/` sub-modules).
-4. **Persistence Layer** — [fjall](https://github.com/fjall-rs/fjall) LSM-tree database for on-disk storage.
+4. **Persistence Layer** — [LMDB](https://www.symas.com/lmdb) memory-mapped database for on-disk storage.
 
 ## HTTP Layer (`src/routes.rs`)
 
@@ -38,11 +38,11 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `GET` | `/status` | Health check |
 | `GET` | `/collections` | List collections |
 | `POST` | `/collections` | Create collection |
-| `GET` | `/collections/{name}` | Collection metadata |
-| `DELETE` | `/collections/{name}` | Delete collection |
-| `POST` | `/collections/{name}/items` | Upsert document |
-| `DELETE` | `/collections/{name}/items/{id}` | Delete document |
-| `GET` | `/collections/{name}/search?q=...` | Search documents |
+| `GET` | `/collections/{collection}` | Collection metadata |
+| `DELETE` | `/collections/{collection}` | Delete collection |
+| `POST` | `/collections/{collection}/items` | Upsert document |
+| `DELETE` | `/collections/{collection}/items/{id}` | Delete document |
+| `GET` | `/collections/{collection}/search?q=...` | Search documents |
 | `POST` | `/backup/export` | Export database snapshot to a file in the dumps folder |
 | `POST` | `/backup/import` | Import a snapshot from the dumps folder |
 | `GET` | `/queue` | Pending index queue depth |
@@ -51,10 +51,14 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 
 The `Store` struct (in `src/store/mod.rs`) is the heart of Aperio. It holds:
 
-- **`db: fjall::Database`** — the underlying database handle.
-- **`config: StoreConfig`** — tunable parameters (shard sizes, token length, compression, index interval).
+- **`env: heed::Env`** — the underlying LMDB environment handle.
+- **`db_meta: DbBytes`** — LMDB database handle for collection metadata (`meta`).
+- **`db_queue: DbBytes`** — LMDB database handle for the index queue (`queue`).
+- **`db_docs: DbBytes`** — LMDB database handle for stored JSON documents (`docs`).
+- **`db_inverted: DbBytes`** — LMDB database handle for the inverted index (`inverted`).
+- **`config: StoreConfig`** — tunable parameters (shard sizes, token length, index interval).
 - **`collections: RwLock<HashMap<String, CollectionMeta>>`** — in-memory registry of known collections, their ID type and searchable fields.
-- **`lock: Mutex<()>`** — serializes write operations (upsert/delete) for index consistency.
+- **`lock: Mutex<()>`** — serializes write operations (delete/collection mutation) for index consistency.
 - **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
 
 The store logic is split across sub-modules:
@@ -74,7 +78,7 @@ Tokens are deduplicated into a `HashSet<String>` before indexing.
 
 ### Inverted Index
 
-Each collection has an inverted index stored in a dedicated fjall keyspace (`{name}.inverted`). For every unique token (word), posting lists map to document IDs.
+All collections share a single LMDB database (`inverted`) for the inverted index. Keys are prefixed with the collection name and a null byte (e.g. `"mycol\0hello\0000042"` for shard 42 of word "hello" in collection "mycol").
 
 ### Two ID Strategies
 
@@ -98,10 +102,9 @@ Posting lists use [RoaringTreemap](https://github.com/RoaringBitmap/roaring-rs) 
 ### Search Execution
 
 1. **Tokenize** the query string.
-2. **List shard indices** for each token in parallel (via rayon).
-3. **Sort tokens by shard count** (rarest-first optimization).
-4. **Load posting lists**: for string IDs, merge shards in a sorted iterative merge; for number IDs, union shard bitmaps per word, then compute the intersection.
-5. **Apply sort and pagination**: sort by ID ascending or descending, apply optional `after` cursor, cap at `take`.
+2. **List shard indices** for each token (rarest-first optimization).
+3. **Load posting lists**: for string IDs, merge shards in a sorted iterative merge; for number IDs, union shard bitmaps per word, then compute the intersection.
+4. **Apply sort and pagination**: sort by ID ascending or descending, apply optional `after` cursor, cap at `take`.
 
 ### Search: String IDs
 
@@ -113,36 +116,29 @@ For number-ID collections, each shard is a `RoaringTreemap`. Per word, all shard
 
 ## Background Indexing (`spawn_background`)
 
-When the background indexer is active, `upsert()` writes to a FIFO queue (`_index_queue` keyspace) instead of directly updating the index. A `tokio::spawn` task polls the queue at `index_interval` (default 900ms) and dispatches `process_pending_queue()` on Tokio's blocking thread pool via `spawn_blocking`. Within each batch, tokenization runs in parallel across queued items using rayon, then posting list mutations are applied sequentially to a shared `OwnedWriteBatch`.
+`upsert()` always writes to a FIFO queue (`queue` database) and returns immediately. A `tokio::spawn` task polls the queue at `index_interval` (default 900ms) and dispatches `process_pending_queue()` on Tokio's blocking thread pool via `spawn_blocking`. Within each batch, items are processed sequentially: tokenization via charabia, stale token removal, posting list updates, and doc storage — all within a single LMDB write transaction.
 
-This batches write operations and reduces lock contention. When the background indexer is not active (e.g., in tests), `upsert()` calls `upsert_internal()` synchronously.
+This batches write operations and reduces lock contention. In tests, `flush()` can be called to drain the queue synchronously.
 
-## Persistence Layer (fjall)
+## Persistence Layer (LMDB)
 
-[fjall](https://github.com/fjall-rs/fjall) is an embedded LSM-tree storage engine (a RocksDB/Sled alternative). Aperio uses these fjall keyspaces:
+[LMDB](https://www.symas.com/lmdb) is an embedded memory-mapped database (a key-value store). Aperio uses these LMDB databases via `heed`:
 
-| Keyspace | Purpose |
-|---|---|
-| `_collections` | Collection name → `CollectionMeta` (ID type + searchable fields) |
-| `_index_queue` | Pending index operations (background indexing) |
-| `{name}.inverted` | Inverted index per collection (word → posting lists) |
-| `{name}.docs` | Full JSON documents per collection (id → JSON bytes) |
+| Database | Purpose |
+|---|---|---|
+| `meta` | Collection name → `CollectionMeta` (ID type + searchable fields) |
+| `queue` | Pending index operations (background indexing), keyed by sequence number |
+| `docs` | Full JSON documents, keyed by `{collection}\0{doc_id}` |
+| `inverted` | Inverted index, keyed by `{collection}\0{word}\0{shard_index}` |
 
-Configurable fjall options exposed via `StoreConfig`:
+Configurable queue options exposed via `StoreConfig`:
 
-- `inverted_write_buffer_size` — memtable size for `{collection}.inverted`.
-- `docs_buffer_size` — memtable size for `{collection}.docs`.
-- `index_queue_buffer_size` — memtable size for `_index_queue`.
-- `docs_compression`, `inverted_string_compression`, `inverted_roaring_compression`, `index_queue_compression`, `collections_compression` — per-keyspace data block compression (`"none"` or `"lz4"`).
-- `block_cache_size` — global block cache for the database (set on `Database::builder`, not `StoreConfig`).
-- `inverted_roaring_block_size`, `inverted_string_block_size`, `docs_block_size`, `queue_block_size`, `meta_block_size` — per-keyspace data block sizes.
-- `inverted_string_hash_ratio`, `inverted_roaring_hash_ratio`, `docs_hash_ratio` — hash index ratios for inverted/doc keyspaces.
 - `index_interval` — interval between background index queue flushes.
 - `max_queue_batch_size` — items processed per background tick.
 
 ## Configuration (`src/config.rs`)
 
-Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is **strict**: on any read or parse error the process panics with a clear message. The `AppConfig` struct maps one-to-one with `StoreConfig` fields plus server-level options (`block_cache_size`, `maintenance_threads`, `log_level`, `main_api_key`, `search_api_key`, `dumps_folder`).
+Aperio reads an optional TOML config file (`CONFIG_FILE` env var). Parsing is **strict**: on any read or parse error the process panics with a clear message. The `AppConfig` struct mirrors `StoreConfig` fields (with `index_interval_ms` converted to a `Duration`) plus server-level options (`log_level`, `main_api_key`, `search_api_key`, `dumps_folder`).
 
 The `dumps_folder` config option sets the directory for backup snapshots. It defaults to `None` (unset) — if missing, `POST /backup/export` and `POST /backup/import` return `400 Bad Request`. This prevents accidental file writes when the operator hasn't explicitly configured a dump location.
 
@@ -161,38 +157,46 @@ Axum's `IntoResponse` impl renders errors as JSON: `{"error": "message"}`.
 ## Data Flow: Document Insertion
 
 ```
-Client → POST /collections/{name}/items
+Client → POST /collections/{collection}/items
   → routes::upsert_item()
-    → store.upsert(name, doc)
-      → [background active?]
-        → Yes: write to _index_queue → return
-        → No:  lock() → upsert_internal()
-          → extract `id` from JSON doc
-          → extract searchable field values from JSON doc
-          → tokenize combined searchable content (charabia)
-          → load old JSON from {name}.docs
-          → compute old tokens from old searchable fields
-          → remove stale posting list entries
-          → add/update posting list entries
-          → store full JSON doc in {name}.docs
-          → unlock()
+    → store.upsert(collection, doc)
+      → validate collection exists
+      → extract `id` from JSON doc
+      → allocate sequence number
+      → serialize doc to JSON bytes
+      → write QueuedIndex entry to `queue` database
+      → return immediately
+
+  (background ticker)
+    → store.process_pending_queue()
+      → read up to max_queue_batch_size entries from `queue`
+      → for each entry:
+        → deserialize queued document
+        → extract searchable content from JSON
+        → tokenize (charabia)
+        → load old doc from `docs` database
+        → compute old tokens for diff
+        → remove stale posting list entries from `inverted`
+        → store new doc in `docs` database
+        → add new posting list entries to `inverted`
+        → delete queue entry
+      → commit single LMDB write transaction
 ```
 
 ## Data Flow: Search
 
 ```
-Client → GET /collections/{name}/search?q=...
+Client → GET /collections/{collection}/search?q=...
   → routes::search()
-    → store.search(name, query, sort, take, after)
+    → store.search(collection, query, sort, take, after)
       → validate collection exists
       → tokenize query
-      → parallel: list shard indices per word
-      → sort by rarest word first
-      → parallel: load posting lists
+      → list shard indices per word, sort by rarest first
+      → load posting lists (sequential)
       → [string IDs]: sorted merge + membership check
       → [number IDs]: bitmap union + intersection
       → apply after-cursor, sort, limit
-      → look up full JSON docs from {name}.docs
+      → look up full JSON docs from `docs` database
       → return Vec<serde_json::Value>
 ```
 
