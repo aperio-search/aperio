@@ -35,7 +35,7 @@ apt install unzip
 curl -fsSL https://bun.sh/install | bash
 source /root/.bashrc
 
-# Disable THP on the server. This prevents fjall block cache allocation to gets mapped even though the cache is logically empty
+# Disable THP on the server. THP can interfere with LMDB's mmap performance
 echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
 
 # If you wanna the small dataset:
