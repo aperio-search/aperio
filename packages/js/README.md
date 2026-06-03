@@ -61,6 +61,7 @@ await client.deleteCollection("movies");
 | Method | Description |
 |--------|-------------|
 | `search(collection, params)` | Full-text search with pagination |
+| `suggest(collection, params)` | Suggest indexed terms matching a prefix |
 
 ### Backup
 

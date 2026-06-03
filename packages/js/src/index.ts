@@ -12,5 +12,7 @@ export type {
 	SearchParams,
 	SearchResponse,
 	StatusResponse,
+	SuggestParams,
+	SuggestResponse,
 } from "./types.js";
 export { AperioError, toCamel } from "./types.js";

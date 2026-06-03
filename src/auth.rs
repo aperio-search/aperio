@@ -37,7 +37,7 @@ pub async fn check_auth(State(auth): State<AuthConfig>, req: Request, next: Next
         }
     };
 
-    let is_search = path.ends_with("/search");
+    let is_search = path.ends_with("/search") || path.ends_with("/suggest");
 
     if is_search {
         if token == auth.main_api_key || token == auth.search_api_key {

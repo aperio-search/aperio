@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::store::StoreConfig;
+use crate::store::{FSTConfig, StoreConfig};
 
 #[derive(Deserialize, Default)]
 pub struct AppConfig {
@@ -17,6 +17,10 @@ pub struct AppConfig {
     pub main_api_key: Option<String>,
     pub search_api_key: Option<String>,
     pub dumps_folder: Option<String>,
+    pub fst_enabled: Option<bool>,
+    pub fst_max_words: Option<usize>,
+    pub fst_max_size_kb: Option<usize>,
+    pub fst_consolidate_interval_secs: Option<u64>,
 }
 
 impl AppConfig {
@@ -34,12 +38,27 @@ impl AppConfig {
     }
 
     pub fn merge_into_store_config(self) -> StoreConfig {
+        let mut base = FSTConfig::default();
+        if let Some(v) = self.fst_enabled {
+            base.enabled = v;
+        }
+        if let Some(v) = self.fst_max_words {
+            base.max_words = v;
+        }
+        if let Some(v) = self.fst_max_size_kb {
+            base.max_size_kb = v;
+        }
+        if let Some(v) = self.fst_consolidate_interval_secs {
+            base.consolidate_after_secs = v;
+        }
         StoreConfig {
             min_token_length: self.min_token_length.unwrap_or(3),
             max_string_shard_size: self.max_string_shard_size.unwrap_or(1000),
             max_roaring_shard_size: self.max_roaring_shard_size.unwrap_or(100_000),
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
             max_queue_batch_size: self.max_queue_batch_size.unwrap_or(5000),
+            fst_config: base,
+            fst_consolidate_interval: Duration::from_secs(60),
         }
     }
 }
@@ -154,6 +173,10 @@ search_api_key = "custom-search-key"
             main_api_key: None,
             search_api_key: None,
             dumps_folder: None,
+            fst_enabled: None,
+            fst_max_words: None,
+            fst_max_size_kb: None,
+            fst_consolidate_interval_secs: None,
         };
         let store_cfg = app_cfg.merge_into_store_config();
         assert_eq!(store_cfg.min_token_length, 5);

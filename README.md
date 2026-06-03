@@ -62,10 +62,10 @@ docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" ghcr.io/aperio-search/aperio
 │                   HTTP (port 3000)                │
 ├───────────────────────────────────────────────────┤
 │          Axum Router (src/routes.rs)              │
-│     /collections  /search  /items                 │
+│     /collections  /search  /suggest  /items       │
 ├───────────────────────────────────────────────────┤
 │            Store Engine (src/store/)              │
-│  Inverted Index  ·  Tokenization  ·  ID Strategy  │
+│  Inverted Index  ·  FST Vocabulary  ·  ID Strategy│
 ├───────────────────────────────────────────────────┤
 │    Auth (src/auth.rs)  ·  Backup (src/backup.rs)  │
 ├───────────────────────────────────────────────────┤
@@ -79,7 +79,7 @@ The server has four layers:
 
 1. **HTTP Layer** — Axum router exposing REST endpoints.
 2. **Auth & Backup** — API key authentication (`src/auth.rs`) and snapshot export/import (`src/backup.rs`).
-3. **Store Engine** — Core logic: tokenization, inverted index management, search/insert (`src/store/` sub-modules).
+3. **Store Engine** — Core logic: tokenization, inverted index, FST vocabulary index, search/insert (`src/store/` sub-modules).
 4. **Persistence Layer** — [LMDB](https://www.symas.com/lmdb) memory-mapped database for on-disk storage.
 
 ### HTTP Layer (`src/routes.rs`)
@@ -96,6 +96,7 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `POST` | `/collections/{collection}/items` | Upsert document |
 | `DELETE` | `/collections/{collection}/items/{id}` | Delete document |
 | `GET` | `/collections/{collection}/search?q=...` | Search documents |
+| `GET` | `/collections/{collection}/suggest?q=...` | Suggest indexed terms matching a prefix |
 | `POST` | `/backup/export` | Export database snapshot to a file |
 | `POST` | `/backup/import` | Import a snapshot from the dumps folder |
 | `GET` | `/queue` | Pending index queue depth |
@@ -115,7 +116,8 @@ The `Store` struct (in `src/store/mod.rs`) is the heart of Aperio. It holds:
 - **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
 
 The store logic is split across sub-modules:
-- `src/store/config.rs` — `StoreConfig`, `IdType`, `CollectionMeta`, `PostingShard`, `QueuedIndex`.
+- `src/store/config.rs` — `StoreConfig`, `FSTConfig`, `IdType`, `CollectionMeta`, `PostingShard`, `QueuedIndex`.
+- `src/store/fst.rs` — per-collection FST vocabulary index (push/pop, consolidation, prefix/fuzzy search).
 - `src/store/posting_list.rs` — shard-based posting list operations for both ID strategies.
 - `src/store/search.rs` — search execution (intersection, cursor pagination) for string and number IDs.
 
@@ -152,7 +154,11 @@ A `Vec<u64>` would be faster for posting-list operations, but `u64` can't repres
 
 Posting lists use [RoaringTreemap](https://github.com/RoaringBitmap/roaring-rs) bitmaps, sharded at `max_roaring_shard_size` (default 100,000). Bitmaps offer compact storage and fast bitwise intersection for multi-term queries.
 
-#### Search Execution
+#### FST Vocabulary Index
+
+Each collection has an on-disk FST that stores all indexed terms, enabling **term suggestion** via `GET /collections/{name}/suggest?q=...`. Terms are batched during indexing and periodically consolidated to disk. Suggestion uses `StartsWith` prefix matching from the `fst` crate.
+
+### Search Execution
 
 1. **Tokenize** the query string.
 2. **List shard indices** for each token (rarest-first optimization).

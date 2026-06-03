@@ -28,6 +28,11 @@ log_level = "info"
 main_api_key = "my-secret-key"
 search_api_key = "my-search-key"
 dumps_folder = "/data/dumps"
+
+# fst_enabled = false    # uncomment to disable FST suggest index
+fst_max_words = 250000
+fst_max_size_kb = 2048
+fst_consolidate_interval_secs = 300
 ```
 
 ## Indexing Behaviour
@@ -39,6 +44,17 @@ dumps_folder = "/data/dumps"
 | `max_roaring_shard_size` | `integer` | `100000` | Max document IDs per roaring bitmap shard (only applies to `"id_type": "number"`) |
 | `index_interval_ms` | `integer` | `900` | Interval in milliseconds between background index queue flushes. Lower values reduce write-to-search latency; higher values batch more work per flush |
 | `max_queue_batch_size` | `integer` | `5000` | Maximum items to pull from the index queue per background tick. Lower values reduce per-tick memory usage during bulk ingestion; higher values drain the queue faster |
+
+## Vocabulary Index (FST)
+
+Aperio maintains a per-collection **Finite State Transducer** (FST) as a vocabulary index of all indexed terms. The FST powers the `GET /collections/{name}/suggest` endpoint and is rebuilt incrementally via periodic consolidation.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `fst_enabled` | `boolean` | `true` | Set to `false` to disable the FST vocabulary index entirely. Existing `.fst` files are deleted on next startup, the suggest endpoint returns empty results, and there is no indexing overhead. Re-enabling starts with an empty FST and only terms indexed from that point forward are added |
+| `fst_max_words` | `integer` | `250000` | Maximum number of unique words per FST. Prevents unbounded growth |
+| `fst_max_size_kb` | `integer` | `2048` | Maximum FST file size in kilobytes |
+| `fst_consolidate_interval_secs` | `integer` | `300` | Seconds of inactivity before a dirty FST is consolidated to disk |
 
 ## Server & Authentication
 

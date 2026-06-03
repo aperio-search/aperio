@@ -54,7 +54,9 @@ async fn main() {
     let search_api_key = app_config.search_api_key.clone();
 
     let store_config = app_config.merge_into_store_config();
-    let store = Store::with_config(env, store_config);
+    let fst_path = db_path.join("fst");
+    std::fs::create_dir_all(&fst_path).expect("failed to create FST directory");
+    let store = Store::with_config(env, store_config, fst_path);
     let store = std::sync::Arc::new(store);
     store.spawn_background();
 

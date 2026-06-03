@@ -71,7 +71,11 @@ export default defineConfig({
               { text: "Deleting Items", link: "/deleting-items" },
             ],
           },
-          { text: "Searching Documents", link: "/searching-documents" },
+          {
+            text: "Searching Documents",
+            link: "/searching-documents",
+          },
+          { text: "Suggesting Terms", link: "/suggesting-terms" },
           { text: "Deploying", link: "/deploying" },
           { text: "Import & Export", link: "/import-export" },
           { text: "Queue", link: "/queue" },

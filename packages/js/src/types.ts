@@ -59,6 +59,16 @@ export interface QueueDepthResponse {
 	pending: number;
 }
 
+export interface SuggestParams {
+	q: string;
+	take?: number;
+}
+
+export interface SuggestResponse {
+	results: string[];
+	take: number;
+}
+
 export interface StatusResponse {
 	ok: boolean;
 }

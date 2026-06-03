@@ -138,6 +138,18 @@ pub struct SearchResponse {
     pub elapsed_ms: f64,
 }
 
+#[derive(Deserialize)]
+pub struct SuggestParams {
+    pub q: String,
+    pub take: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct SuggestResponse {
+    pub results: Vec<String>,
+    pub take: usize,
+}
+
 #[derive(Serialize)]
 pub struct StatusResponse {
     pub ok: bool,

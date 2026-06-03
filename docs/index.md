@@ -17,6 +17,9 @@ features:
   - title: Screamingly Fast
     icon: ⚡️
     details: Engineered for performance, delivering ultra-low latency search results.
+  - title: Autocomplete / Suggested Terms
+    icon: 🔮
+    details: Suggest indexed terms as users type.
   - title: Full Unicode Support
     icon: 🌐
     details: Built-in normalization and encoding compatibility to handle global data flawlessly.

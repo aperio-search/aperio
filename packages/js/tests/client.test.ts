@@ -248,6 +248,59 @@ describe("AperioClient", () => {
 		});
 	});
 
+		describe("suggest", () => {
+		it("sends query params and returns camelCase", async () => {
+			const body = {
+				results: ["apple", "application"],
+				take: 10,
+			};
+
+			globalThis.fetch = mock.fn(() =>
+				Promise.resolve({
+					ok: true,
+					status: 200,
+					text: () => Promise.resolve(JSON.stringify(body)),
+					json: () => Promise.resolve(body),
+				}),
+			);
+
+			const result = await client.suggest("posts", {
+				q: "app",
+				take: 5,
+			});
+
+			assert.deepStrictEqual(result.results, ["apple", "application"]);
+			assert.strictEqual(result.take, 10);
+
+			const {
+				arguments: [url],
+			} = (globalThis.fetch as ReturnType<typeof mock.fn>).mock.calls[0];
+			assert.ok(url.includes("q=app"));
+			assert.ok(url.includes("take=5"));
+		});
+
+		it("passes multi-word phrase to server", async () => {
+			globalThis.fetch = mock.fn(() =>
+				Promise.resolve({
+					ok: true,
+					status: 200,
+					text: () =>
+						Promise.resolve(
+							JSON.stringify({ results: ["world"], take: 10 }),
+						),
+					json: () => Promise.resolve({ results: ["world"], take: 10 }),
+				}),
+			);
+
+			await client.suggest("posts", { q: "hello wor" });
+
+			const {
+				arguments: [url],
+			} = (globalThis.fetch as ReturnType<typeof mock.fn>).mock.calls[0];
+			assert.ok(url.includes("q=hello+wor"));
+		});
+	});
+
 	describe("queueDepth", () => {
 		it("returns pending count", async () => {
 			globalThis.fetch = mock.fn(() =>

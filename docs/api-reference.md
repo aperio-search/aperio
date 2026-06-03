@@ -31,6 +31,7 @@ Complete list of all Aperio HTTP endpoints.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/collections/{collection}/search` | Search documents matching a query |
+| `GET` | `/collections/{collection}/suggest` | Suggest indexed terms matching a prefix |
 
 ## Queue
 
