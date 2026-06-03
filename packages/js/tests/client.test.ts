@@ -248,7 +248,7 @@ describe("AperioClient", () => {
 		});
 	});
 
-		describe("suggest", () => {
+	describe("suggest", () => {
 		it("sends query params and returns camelCase", async () => {
 			const body = {
 				results: ["apple", "application"],
@@ -285,9 +285,7 @@ describe("AperioClient", () => {
 					ok: true,
 					status: 200,
 					text: () =>
-						Promise.resolve(
-							JSON.stringify({ results: ["world"], take: 10 }),
-						),
+						Promise.resolve(JSON.stringify({ results: ["world"], take: 10 })),
 					json: () => Promise.resolve({ results: ["world"], take: 10 }),
 				}),
 			);

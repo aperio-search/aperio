@@ -88,29 +88,27 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
             // Load all exact shards
             for &shard_idx in &exact_indices {
                 let key = posting_list::shard_key(collection, token, shard_idx);
-                if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
-                    if let Ok(bitmap) = roaring_from_slice(&data) {
-                        token_bitmap |= &bitmap;
-                    }
+                if let Ok(Some(data)) = inverted.get(txn, key.as_slice())
+                    && let Ok(bitmap) = roaring_from_slice(&data)
+                {
+                    token_bitmap |= &bitmap;
                 }
             }
         }
 
         // Fuzzy expansion: if exact match has no results, try FST
-        if !has_exact {
-            if let Some(pool) = fst_pool {
-                let similar = pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
-                for similar_term in &similar {
-                    let sim_indices =
-                        posting_list::list_shard_indices(inverted, txn, collection, similar_term)
-                            .unwrap_or_default();
-                    for &shard_idx in &sim_indices {
-                        let key = posting_list::shard_key(collection, similar_term, shard_idx);
-                        if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
-                            if let Ok(bitmap) = roaring_from_slice(&data) {
-                                token_bitmap |= &bitmap;
-                            }
-                        }
+        if !has_exact && let Some(pool) = fst_pool {
+            let similar = pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
+            for similar_term in &similar {
+                let sim_indices =
+                    posting_list::list_shard_indices(inverted, txn, collection, similar_term)
+                        .unwrap_or_default();
+                for &shard_idx in &sim_indices {
+                    let key = posting_list::shard_key(collection, similar_term, shard_idx);
+                    if let Ok(Some(data)) = inverted.get(txn, key.as_slice())
+                        && let Ok(bitmap) = roaring_from_slice(&data)
+                    {
+                        token_bitmap |= &bitmap;
                     }
                 }
             }
@@ -191,36 +189,32 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         if has_exact {
             for &shard_idx in &exact_indices {
                 let key = posting_list::shard_key(collection, token, shard_idx);
-                if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
-                    if let Ok(shard) =
+                if let Ok(Some(data)) = inverted.get(txn, key.as_slice())
+                    && let Ok(shard) =
                         rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
-                    {
-                        for id in shard.ids.iter() {
-                            all_ids.insert(id.to_string());
-                        }
+                {
+                    for id in shard.ids.iter() {
+                        all_ids.insert(id.to_string());
                     }
                 }
             }
         }
 
         // Fuzzy expansion: try FST if exact match has no results
-        if !has_exact {
-            if let Some(pool) = fst_pool {
-                let similar = pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
-                for similar_term in &similar {
-                    let sim_indices =
-                        posting_list::list_shard_indices(inverted, txn, collection, similar_term)
-                            .unwrap_or_default();
-                    for &shard_idx in &sim_indices {
-                        let key = posting_list::shard_key(collection, similar_term, shard_idx);
-                        if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
-                            if let Ok(shard) =
-                                rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
-                            {
-                                for id in shard.ids.iter() {
-                                    all_ids.insert(id.to_string());
-                                }
-                            }
+        if !has_exact && let Some(pool) = fst_pool {
+            let similar = pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
+            for similar_term in &similar {
+                let sim_indices =
+                    posting_list::list_shard_indices(inverted, txn, collection, similar_term)
+                        .unwrap_or_default();
+                for &shard_idx in &sim_indices {
+                    let key = posting_list::shard_key(collection, similar_term, shard_idx);
+                    if let Ok(Some(data)) = inverted.get(txn, key.as_slice())
+                        && let Ok(shard) =
+                            rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
+                    {
+                        for id in shard.ids.iter() {
+                            all_ids.insert(id.to_string());
                         }
                     }
                 }
@@ -372,58 +366,56 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
 
 /// Seek within a single virtual shard (binary search on the sorted IDs).
 fn seek_in_shard(state: &mut WordIterState, target: &str, desc: bool) -> Result<(), AppError> {
-    loop {
-        match state.current() {
-            None => return Ok(()),
-            Some(id) => {
-                let at_or_past = if desc { id <= target } else { id >= target };
-                if at_or_past {
-                    return Ok(());
-                }
+    match state.current() {
+        None => return Ok(()),
+        Some(id) => {
+            let at_or_past = if desc { id <= target } else { id >= target };
+            if at_or_past {
+                return Ok(());
             }
         }
-
-        if let Some(ref data) = state.cur_shard_data {
-            if let Ok(shard) = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data) {
-                let ids = &shard.ids;
-                let len = ids.len();
-                if desc {
-                    let mut lo = 0usize;
-                    let mut hi = len;
-                    while lo < hi {
-                        let mid = (lo + hi) / 2;
-                        match ids.get(mid) {
-                            Some(s) if s.as_str() <= target => lo = mid + 1,
-                            _ => hi = mid,
-                        }
-                    }
-                    if lo > 0 {
-                        state.cur_pos = lo - 1;
-                        return Ok(());
-                    }
-                } else {
-                    let mut lo = 0usize;
-                    let mut hi = len;
-                    while lo < hi {
-                        let mid = (lo + hi) / 2;
-                        match ids.get(mid) {
-                            Some(s) if s.as_str() < target => lo = mid + 1,
-                            _ => hi = mid,
-                        }
-                    }
-                    if lo < len {
-                        state.cur_pos = lo;
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        // No more IDs — mark as exhausted
-        state.cur_shard_data = None;
-        state.cur_pos = 0;
-        return Ok(());
     }
+
+    if let Some(ref data) = state.cur_shard_data
+        && let Ok(shard) = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data)
+    {
+        let ids = &shard.ids;
+        let len = ids.len();
+        if desc {
+            let mut lo = 0usize;
+            let mut hi = len;
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                match ids.get(mid) {
+                    Some(s) if s.as_str() <= target => lo = mid + 1,
+                    _ => hi = mid,
+                }
+            }
+            if lo > 0 {
+                state.cur_pos = lo - 1;
+                return Ok(());
+            }
+        } else {
+            let mut lo = 0usize;
+            let mut hi = len;
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                match ids.get(mid) {
+                    Some(s) if s.as_str() < target => lo = mid + 1,
+                    _ => hi = mid,
+                }
+            }
+            if lo < len {
+                state.cur_pos = lo;
+                return Ok(());
+            }
+        }
+    }
+
+    // No more IDs — mark as exhausted
+    state.cur_shard_data = None;
+    state.cur_pos = 0;
+    Ok(())
 }
 
 /// Advance by one position in a single virtual shard.
