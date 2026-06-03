@@ -8,6 +8,17 @@ use super::config::ArchivedPostingShard;
 use super::roaring_from_slice;
 use super::tokenize;
 
+pub struct SearchParams<'a> {
+    pub inverted: DbBytes,
+    pub txn: &'a heed::RoTxn<'a>,
+    pub collection: &'a str,
+    pub config_min_token_length: usize,
+    pub query: &'a str,
+    pub sort_desc: bool,
+    pub take: usize,
+    pub after: Option<&'a str>,
+}
+
 struct WordIterState {
     indices: Vec<usize>,
     shard_pos: isize,
@@ -50,16 +61,17 @@ impl WordIterState {
 
 use super::posting_list;
 
-pub fn roaring_search(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    config_min_token_length: usize,
-    query: &str,
-    sort_desc: bool,
-    take: usize,
-    after: Option<&str>,
-) -> Result<Vec<String>, AppError> {
+pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
+    let SearchParams {
+        inverted,
+        txn,
+        collection,
+        config_min_token_length,
+        query,
+        sort_desc,
+        take,
+        after,
+    } = params;
     let tokens: Vec<String> = tokenize(query, config_min_token_length)
         .into_iter()
         .collect();
@@ -137,16 +149,17 @@ pub fn roaring_search(
     Ok(results)
 }
 
-pub fn string_search(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    config_min_token_length: usize,
-    query: &str,
-    sort_desc: bool,
-    take: usize,
-    after: Option<&str>,
-) -> Result<Vec<String>, AppError> {
+pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
+    let SearchParams {
+        inverted,
+        txn,
+        collection,
+        config_min_token_length,
+        query,
+        sort_desc,
+        take,
+        after,
+    } = params;
     let tokens: Vec<String> = tokenize(query, config_min_token_length)
         .into_iter()
         .collect();
