@@ -48,7 +48,6 @@ impl WordIterState {
         }
         shard.ids.get(self.cur_pos).map(|s| s.as_str())
     }
-
 }
 
 use super::posting_list;
@@ -100,16 +99,13 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         // Fuzzy expansion: if exact match has no results, try FST
         if !has_exact {
             if let Some(pool) = fst_pool {
-                let similar =
-                    pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
+                let similar = pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
                 for similar_term in &similar {
-                    let sim_indices = posting_list::list_shard_indices(
-                        inverted, txn, collection, similar_term,
-                    )
-                    .unwrap_or_default();
+                    let sim_indices =
+                        posting_list::list_shard_indices(inverted, txn, collection, similar_term)
+                            .unwrap_or_default();
                     for &shard_idx in &sim_indices {
-                        let key =
-                            posting_list::shard_key(collection, similar_term, shard_idx);
+                        let key = posting_list::shard_key(collection, similar_term, shard_idx);
                         if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
                             if let Ok(bitmap) = roaring_from_slice(&data) {
                                 token_bitmap |= &bitmap;
@@ -210,21 +206,16 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         // Fuzzy expansion: try FST if exact match has no results
         if !has_exact {
             if let Some(pool) = fst_pool {
-                let similar =
-                    pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
+                let similar = pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
                 for similar_term in &similar {
-                    let sim_indices = posting_list::list_shard_indices(
-                        inverted, txn, collection, similar_term,
-                    )
-                    .unwrap_or_default();
+                    let sim_indices =
+                        posting_list::list_shard_indices(inverted, txn, collection, similar_term)
+                            .unwrap_or_default();
                     for &shard_idx in &sim_indices {
-                        let key =
-                            posting_list::shard_key(collection, similar_term, shard_idx);
+                        let key = posting_list::shard_key(collection, similar_term, shard_idx);
                         if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
-                            if let Ok(shard) = rkyv::access::<
-                                ArchivedPostingShard,
-                                rkyv::rancor::Error,
-                            >(&data)
+                            if let Ok(shard) =
+                                rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
                             {
                                 for id in shard.ids.iter() {
                                     all_ids.insert(id.to_string());
@@ -278,9 +269,7 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
             state.cur_pos = if sort_desc {
                 // Point to last element for desc iteration
                 if let Ok(shard) =
-                    rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(
-                        &encoded_shards[*idx],
-                    )
+                    rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&encoded_shards[*idx])
                 {
                     if !shard.ids.is_empty() {
                         shard.ids.len() - 1
@@ -299,12 +288,7 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
 
     if let Some(cursor) = after {
         for (i, (_word, _, idx)) in combined.iter().enumerate() {
-            skip_past_cursor_virtual(
-                cursor,
-                &mut iters[i],
-                &encoded_shards[*idx],
-                sort_desc,
-            )?;
+            skip_past_cursor_virtual(cursor, &mut iters[i], &encoded_shards[*idx], sort_desc)?;
         }
     }
 
@@ -387,11 +371,7 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
 }
 
 /// Seek within a single virtual shard (binary search on the sorted IDs).
-fn seek_in_shard(
-    state: &mut WordIterState,
-    target: &str,
-    desc: bool,
-) -> Result<(), AppError> {
+fn seek_in_shard(state: &mut WordIterState, target: &str, desc: bool) -> Result<(), AppError> {
     loop {
         match state.current() {
             None => return Ok(()),
@@ -404,9 +384,7 @@ fn seek_in_shard(
         }
 
         if let Some(ref data) = state.cur_shard_data {
-            if let Ok(shard) =
-                rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data)
-            {
+            if let Ok(shard) = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data) {
                 let ids = &shard.ids;
                 let len = ids.len();
                 if desc {
@@ -514,5 +492,3 @@ fn skip_past_cursor_virtual(
     }
     Ok(())
 }
-
-
