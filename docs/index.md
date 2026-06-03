@@ -19,20 +19,20 @@ features:
     details: Engineered for performance, delivering ultra-low latency search results.
   - title: Typo-Tolerant Search
     icon: ✏️
-    details: Forgiving full-text search with automatic typo correction via Levenshtein automaton — enabled by default.
-  - title: Autocomplete / Suggested Terms
+    details: Smart, out-of-the-box typo correction that ensures users always find what they need.
+  - title: Autocomplete / Suggest
     icon: 🔮
-    details: Suggest indexed terms as users type with prefix matching — powered by an on-disk Finite State Transducer.
-  - title: Full Unicode Support
+    details: Predicts and suggests search terms instantly as users type to anticipate what they are looking for.
+  - title: Multilingual & Unicode Native
     icon: 🌐
-    details: Built-in normalization and encoding compatibility to handle global data flawlessly.
-  - title: Low RAM Footprint
+    details: Built from the ground up to support any language with zero configuration required.
+  - title: Resource-Efficient
     icon: 💾
     details: Highly resource-efficient, keeping memory usage minimal even with massive datasets.
-  - title: DevOps-Free
+  - title: Zero-Config Deployment
     icon: 🛠️
-    details: Easy to deploy, configure, and maintain without needing dedicated DevOps expertise.
-  - title: Multi-Architecture
+    details: Drop it in and let it run with zero initial setup, while remaining highly configurable for advanced tweaks and custom tuning.
+  - title: Cross-Platform Native
     icon: 💻
     details: Works flawlessly across both x64 and arm64 environments.
 ---
