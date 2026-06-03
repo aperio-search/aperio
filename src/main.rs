@@ -43,7 +43,7 @@ async fn main() {
     std::fs::create_dir_all(&db_path).expect("failed to create data directory");
     let env = unsafe {
         heed::EnvOpenOptions::new()
-            .map_size(1024 * 1024 * 1024)
+            .map_size(10 * 1024 * 1024 * 1024 * 1024) // 10 TB
             .max_dbs(4)
             .open(&db_path)
             .expect("failed to open database environment")
