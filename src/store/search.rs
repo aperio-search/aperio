@@ -1,16 +1,17 @@
+use rayon::prelude::*;
 use roaring::{MultiOps, RoaringTreemap};
 
 use crate::error::AppError;
 
 use super::DbBytes;
-use super::config::PostingShard;
+use super::config::ArchivedPostingShard;
 use super::roaring_from_slice;
 use super::tokenize;
 
 struct WordIterState {
     indices: Vec<usize>,
     shard_pos: isize,
-    cur_shard: Option<PostingShard>,
+    cur_shard_data: Option<Vec<u8>>,
     cur_pos: usize,
 }
 
@@ -24,21 +25,26 @@ impl WordIterState {
         Self {
             indices,
             shard_pos,
-            cur_shard: None,
+            cur_shard_data: None,
             cur_pos: 0,
         }
     }
 
+    fn archived_shard(&self) -> Option<&ArchivedPostingShard> {
+        let data = self.cur_shard_data.as_ref()?;
+        rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data).ok()
+    }
+
     fn current(&self) -> Option<&str> {
-        let ids = &self.cur_shard.as_ref()?.ids;
-        if self.cur_pos >= ids.len() {
+        let shard = self.archived_shard()?;
+        if self.cur_pos >= shard.ids.len() {
             return None;
         }
-        ids.get(self.cur_pos).map(|s| s.as_str())
+        shard.ids.get(self.cur_pos).map(|s| s.as_str())
     }
 
     fn ids_len(&self) -> usize {
-        self.cur_shard.as_ref().map(|s| s.ids.len()).unwrap_or(0)
+        self.archived_shard().map(|s| s.ids.len()).unwrap_or(0)
     }
 }
 
@@ -74,16 +80,29 @@ pub fn roaring_search(
         return Ok(Vec::new());
     }
 
-    let word_bitmaps: Vec<RoaringTreemap> = word_shards
+    let word_shard_data: Vec<Vec<Vec<u8>>> = word_shards
         .iter()
-        .map(|(word, indices)| -> Result<RoaringTreemap, AppError> {
-            let mut word_bitmap = RoaringTreemap::new();
-            for &shard_idx in indices {
-                let key = posting_list::shard_key(collection, word, shard_idx);
-                if let Some(data) = inverted.get(txn, key.as_slice())? {
-                    if let Ok(bitmap) = roaring_from_slice(&data) {
-                        word_bitmap |= &bitmap;
+        .map(|(word, indices)| {
+            indices
+                .iter()
+                .filter_map(|&shard_idx| {
+                    let key = posting_list::shard_key(collection, word, shard_idx);
+                    match inverted.get(txn, key.as_slice()) {
+                        Ok(Some(v)) => Some(v),
+                        _ => None,
                     }
+                })
+                .collect()
+        })
+        .collect();
+
+    let word_bitmaps: Vec<RoaringTreemap> = word_shard_data
+        .par_iter()
+        .map(|shard_data| -> Result<RoaringTreemap, AppError> {
+            let mut word_bitmap = RoaringTreemap::new();
+            for data in shard_data {
+                if let Ok(bitmap) = roaring_from_slice(data) {
+                    word_bitmap |= &bitmap;
                 }
             }
             Ok(word_bitmap)
@@ -178,37 +197,40 @@ pub fn string_search(
     let mut results: Vec<String> = Vec::with_capacity(take);
 
     loop {
-        let mut pivot: Option<String> = None;
-        let mut any_exhausted = false;
+        let pivot_str = {
+            let mut best: Option<&str> = None;
+            let mut any_exhausted = false;
 
-        for state in &iters {
-            match state.current() {
-                None => {
-                    any_exhausted = true;
-                }
-                Some(id) => match &pivot {
+            for state in &iters {
+                match state.current() {
                     None => {
-                        pivot = Some(id.to_string());
+                        any_exhausted = true;
+                        break;
                     }
-                    Some(p) => {
-                        let take_this = if sort_desc {
-                            id < p.as_str()
-                        } else {
-                            id > p.as_str()
-                        };
-                        if take_this {
-                            pivot = Some(id.to_string());
+                    Some(id) => match best {
+                        None => best = Some(id),
+                        Some(b) => {
+                            let is_better = if sort_desc { id < b } else { id > b };
+                            if is_better {
+                                best = Some(id);
+                            }
                         }
-                    }
-                },
+                    },
+                }
             }
-        }
 
-        if pivot.is_none() || any_exhausted {
-            break;
-        }
+            if any_exhausted {
+                None
+            } else {
+                best.map(|s| s.to_string())
+            }
+        };
 
-        let pivot = pivot.unwrap();
+        let pivot = match pivot_str {
+            Some(p) => p,
+            None => break,
+        };
+
         let mut all_have = true;
 
         for (i, state) in iters.iter_mut().enumerate() {
@@ -256,21 +278,15 @@ pub fn string_search(
     Ok(results)
 }
 
-fn get_shard(
+fn get_shard_data(
     inverted: DbBytes,
     txn: &heed::RoTxn,
     collection: &str,
     word: &str,
     shard_idx: usize,
-) -> Result<Option<PostingShard>, AppError> {
+) -> Result<Option<Vec<u8>>, AppError> {
     let key = posting_list::shard_key(collection, word, shard_idx);
-    match inverted.get(txn, key.as_slice())? {
-        Some(data) => match rkyv::from_bytes::<PostingShard, rkyv::rancor::Error>(&data) {
-            Ok(shard) => Ok(Some(shard)),
-            Err(_) => Ok(None),
-        },
-        None => Ok(None),
-    }
+    Ok(inverted.get(txn, key.as_slice())?)
 }
 
 fn load_first_shard(
@@ -282,16 +298,17 @@ fn load_first_shard(
 ) -> Result<(), AppError> {
     while (state.shard_pos as usize) < state.indices.len() {
         let idx = state.indices[state.shard_pos as usize];
-        if let Some(shard) = get_shard(inverted, txn, collection, word, idx)? {
-            if !shard.ids.is_empty() {
-                state.cur_shard = Some(shard);
+        if let Some(data) = get_shard_data(inverted, txn, collection, word, idx)? {
+            state.cur_shard_data = Some(data);
+            if state.archived_shard().is_some_and(|s| !s.ids.is_empty()) {
                 state.cur_pos = 0;
                 return Ok(());
             }
+            state.cur_shard_data = None;
         }
         state.shard_pos += 1;
     }
-    state.cur_shard = None;
+    state.cur_shard_data = None;
     state.cur_pos = 0;
     Ok(())
 }
@@ -305,17 +322,18 @@ fn load_last_shard(
 ) -> Result<(), AppError> {
     while state.shard_pos >= 0 {
         let idx = state.indices[state.shard_pos as usize];
-        if let Some(shard) = get_shard(inverted, txn, collection, word, idx)? {
-            if !shard.ids.is_empty() {
-                let maybe_len = shard.ids.len();
-                state.cur_shard = Some(shard);
+        if let Some(data) = get_shard_data(inverted, txn, collection, word, idx)? {
+            state.cur_shard_data = Some(data);
+            let maybe_len = state.ids_len();
+            if maybe_len > 0 {
                 state.cur_pos = maybe_len.saturating_sub(1);
                 return Ok(());
             }
+            state.cur_shard_data = None;
         }
         state.shard_pos -= 1;
     }
-    state.cur_shard = None;
+    state.cur_shard_data = None;
     state.cur_pos = 0;
     Ok(())
 }
@@ -332,26 +350,27 @@ fn advance_shard(
         if desc {
             state.shard_pos -= 1;
             if state.shard_pos < 0 {
-                state.cur_shard = None;
+                state.cur_shard_data = None;
                 state.cur_pos = 0;
                 return Ok(());
             }
         } else {
             state.shard_pos += 1;
             if (state.shard_pos as usize) >= state.indices.len() {
-                state.cur_shard = None;
+                state.cur_shard_data = None;
                 state.cur_pos = 0;
                 return Ok(());
             }
         }
         let idx = state.indices[state.shard_pos as usize];
-        if let Some(shard) = get_shard(inverted, txn, collection, word, idx)? {
-            if !shard.ids.is_empty() {
-                let maybe_len = shard.ids.len();
-                state.cur_shard = Some(shard);
+        if let Some(data) = get_shard_data(inverted, txn, collection, word, idx)? {
+            state.cur_shard_data = Some(data);
+            let maybe_len = state.ids_len();
+            if maybe_len > 0 {
                 state.cur_pos = if desc { maybe_len.saturating_sub(1) } else { 0 };
                 return Ok(());
             }
+            state.cur_shard_data = None;
         }
     }
 }
@@ -398,7 +417,8 @@ fn seek_to(
             }
         }
 
-        if let Some(ids) = state.cur_shard.as_ref().map(|s| &s.ids) {
+        if let Some(shard) = state.archived_shard() {
+            let ids = &shard.ids;
             let len = ids.len();
             if desc {
                 let mut lo = 0usize;
@@ -457,28 +477,39 @@ fn skip_past_cursor(
         .unwrap_or(state.indices.len().saturating_sub(1));
     state.shard_pos = pos_in_indices as isize;
 
-    match get_shard(inverted, txn, collection, word, shard_idx)? {
-        Some(shard) => {
-            let ids = &shard.ids;
-            let mut lo = 0;
-            let mut hi = ids.len();
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                match ids.get(mid) {
-                    Some(s) if s.as_str() < cursor => {
-                        lo = mid + 1;
+    match get_shard_data(inverted, txn, collection, word, shard_idx)? {
+        Some(data) => {
+            let new_cur_pos = {
+                let archived = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data);
+                let shard = match archived {
+                    Ok(s) => s,
+                    Err(_) => {
+                        state.cur_shard_data = None;
+                        state.cur_pos = 0;
+                        return Ok(());
                     }
-                    _ => {
-                        hi = mid;
+                };
+                let ids = &shard.ids;
+                let mut lo = 0;
+                let mut hi = ids.len();
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    match ids.get(mid) {
+                        Some(s) if s.as_str() < cursor => {
+                            lo = mid + 1;
+                        }
+                        _ => {
+                            hi = mid;
+                        }
                     }
                 }
-            }
-            let ids_len = ids.len();
-            state.cur_shard = Some(shard);
-            state.cur_pos = lo.min(ids_len.saturating_sub(1));
+                lo.min(ids.len().saturating_sub(1))
+            };
+            state.cur_shard_data = Some(data);
+            state.cur_pos = new_cur_pos;
         }
         None => {
-            state.cur_shard = None;
+            state.cur_shard_data = None;
             state.cur_pos = 0;
             return Ok(());
         }
