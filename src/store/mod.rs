@@ -206,16 +206,15 @@ impl Store {
             return Ok(meta);
         }
         // Fall back to database
-        if let Ok(rtxn) = self.env.read_txn() {
-            if let Ok(Some(data)) = self.db_meta.get(&rtxn, collection.as_bytes()) {
-                if let Ok(meta) = decode_rkyv!(config::CollectionMeta, &data) {
-                    self.collections
-                        .write()
-                        .unwrap()
-                        .insert(collection.to_string(), meta.clone());
-                    return Ok(meta);
-                }
-            }
+        if let Ok(rtxn) = self.env.read_txn()
+            && let Ok(Some(data)) = self.db_meta.get(&rtxn, collection.as_bytes())
+            && let Ok(meta) = decode_rkyv!(config::CollectionMeta, &data)
+        {
+            self.collections
+                .write()
+                .unwrap()
+                .insert(collection.to_string(), meta.clone());
+            return Ok(meta);
         }
         Err(AppError::NotFound(format!(
             "collection '{}' not found",
@@ -500,26 +499,26 @@ impl Store {
         let rtxn = self.env.read_txn()?;
 
         let ids = match meta.id_type {
-            IdType::Number => search::roaring_search(
-                self.db_inverted,
-                &rtxn,
+            IdType::Number => search::roaring_search(search::SearchParams {
+                inverted: self.db_inverted,
+                txn: &rtxn,
                 collection,
-                self.config.min_token_length,
+                config_min_token_length: self.config.min_token_length,
                 query,
                 sort_desc,
                 take,
                 after,
-            )?,
-            IdType::String => search::string_search(
-                self.db_inverted,
-                &rtxn,
+            })?,
+            IdType::String => search::string_search(search::SearchParams {
+                inverted: self.db_inverted,
+                txn: &rtxn,
                 collection,
-                self.config.min_token_length,
+                config_min_token_length: self.config.min_token_length,
                 query,
                 sort_desc,
                 take,
                 after,
-            )?,
+            })?,
         };
 
         let results: Vec<serde_json::Value> = ids
@@ -644,14 +643,14 @@ impl Store {
 
     fn refresh_collections_cache(&self) -> Result<(), AppError> {
         let mut map = std::collections::HashMap::new();
-        if let Ok(rtxn) = self.env.read_txn() {
-            if let Ok(cursor_iter) = self.db_meta.iter(&rtxn) {
-                for result in cursor_iter.flatten() {
-                    let (k, v) = result;
-                    let name = String::from_utf8_lossy(&k).to_string();
-                    if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &v) {
-                        map.insert(name, col_meta);
-                    }
+        if let Ok(rtxn) = self.env.read_txn()
+            && let Ok(cursor_iter) = self.db_meta.iter(&rtxn)
+        {
+            for result in cursor_iter.flatten() {
+                let (k, v) = result;
+                let name = String::from_utf8_lossy(&k).to_string();
+                if let Ok(col_meta) = decode_rkyv!(config::CollectionMeta, &v) {
+                    map.insert(name, col_meta);
                 }
             }
         }
