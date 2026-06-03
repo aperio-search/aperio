@@ -495,7 +495,11 @@ fn suggest_returns_indexed_terms() {
     store
         .create_collection("docs", "string", &["content".into()])
         .unwrap();
-    for (id, text) in [("1", "apple banana"), ("2", "application"), ("3", "appetite")] {
+    for (id, text) in [
+        ("1", "apple banana"),
+        ("2", "application"),
+        ("3", "appetite"),
+    ] {
         store
             .upsert("docs", json!({"id": id, "content": text}))
             .unwrap();
@@ -543,7 +547,10 @@ fn suggest_respects_limit() {
         .unwrap();
     for i in 0..10u64 {
         store
-            .upsert("docs", json!({"id": i.to_string(), "content": "a".repeat(3 + i as usize)}))
+            .upsert(
+                "docs",
+                json!({"id": i.to_string(), "content": "a".repeat(3 + i as usize)}),
+            )
             .unwrap();
     }
     store.flush().unwrap();

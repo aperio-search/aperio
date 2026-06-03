@@ -20,9 +20,14 @@ pub struct CollectionFST {
 
 impl CollectionFST {
     fn open_or_create(path: &Path) -> Self {
-        let set = path.exists().then(|| {
-            std::fs::read(path).ok().and_then(|data| Set::new(data).ok())
-        }).flatten();
+        let set = path
+            .exists()
+            .then(|| {
+                std::fs::read(path)
+                    .ok()
+                    .and_then(|data| Set::new(data).ok())
+            })
+            .flatten();
         Self {
             set,
             path: path.to_path_buf(),
@@ -73,10 +78,10 @@ impl CollectionFST {
     fn consolidate(&mut self, _config: &FSTConfig) -> Result<(), String> {
         let tmp_path = self.path.with_extension("fst.tmp");
 
-        let writer =
-            std::fs::File::create(&tmp_path).map_err(|e| format!("failed to create tmp fst: {e}"))?;
-        let mut builder = SetBuilder::new(writer)
-            .map_err(|e| format!("failed to create FST builder: {e}"))?;
+        let writer = std::fs::File::create(&tmp_path)
+            .map_err(|e| format!("failed to create tmp fst: {e}"))?;
+        let mut builder =
+            SetBuilder::new(writer).map_err(|e| format!("failed to create FST builder: {e}"))?;
 
         let mut push_words: Vec<Vec<u8>> = self.pending_push.iter().cloned().collect();
         push_words.sort();
@@ -107,7 +112,9 @@ impl CollectionFST {
             push_idx += 1;
         }
 
-        builder.finish().map_err(|e| format!("fst finish error: {e}"))?;
+        builder
+            .finish()
+            .map_err(|e| format!("fst finish error: {e}"))?;
 
         self.set = None;
 
@@ -232,7 +239,13 @@ impl FSTPool {
     fn collection_path(&self, collection: &str) -> PathBuf {
         let safe: String = collection
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         self.base_path.join(format!("{}.fst", safe))
     }
