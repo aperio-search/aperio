@@ -68,16 +68,16 @@ fn full_string_workflow() {
         .unwrap();
     store.flush().unwrap();
 
-    let all = store.search("docs", "fox", false, 10, None, false).unwrap();
+    let all = store.search("docs", "fox", false, 10, None).unwrap();
     assert_eq!(all.len(), 2);
 
     let intersection = store
-        .search("docs", "quick brown", false, 10, None, false)
+        .search("docs", "quick brown", false, 10, None)
         .unwrap();
     assert_eq!(ids(&intersection), vec!["id1", "id3"]);
 
     store.delete_item("docs", "id1").unwrap();
-    let after_delete = store.search("docs", "fox", false, 10, None, false).unwrap();
+    let after_delete = store.search("docs", "fox", false, 10, None).unwrap();
     assert_eq!(ids(&after_delete), vec!["id3"]);
 
     let info = store.collection_info("docs").unwrap();
@@ -106,19 +106,19 @@ fn full_number_workflow() {
         .unwrap();
     store.flush().unwrap();
 
-    let r1 = store.search("docs", "hello", false, 10, None, false).unwrap();
+    let r1 = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&r1), vec!["10", "20"]);
 
     let r2 = store
-        .search("docs", "hello world", false, 10, None, false)
+        .search("docs", "hello world", false, 10, None)
         .unwrap();
     assert_eq!(ids(&r2), vec!["10"]);
 
-    let r3 = store.search("docs", "hello", true, 10, None, false).unwrap();
+    let r3 = store.search("docs", "hello", true, 10, None).unwrap();
     assert_eq!(ids(&r3), vec!["20", "10"]);
 
     store.delete_item("docs", "10").unwrap();
-    let r4 = store.search("docs", "hello", false, 10, None, false).unwrap();
+    let r4 = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&r4), vec!["20"]);
 }
 
@@ -140,7 +140,7 @@ fn string_shard_splitting() {
     }
     store.flush().unwrap();
 
-    let results = store.search("docs", "hello", false, 20, None, false).unwrap();
+    let results = store.search("docs", "hello", false, 20, None).unwrap();
     assert_eq!(results.len(), 12);
 
     let result_ids: HashSet<u64> = ids(&results).iter().map(|s| s.parse().unwrap()).collect();
@@ -167,7 +167,7 @@ fn roaring_shard_splitting() {
     }
     store.flush().unwrap();
 
-    let results = store.search("docs", "hello", false, 20, None, false).unwrap();
+    let results = store.search("docs", "hello", false, 20, None).unwrap();
     assert_eq!(results.len(), 12);
 
     let result_ids: HashSet<u64> = ids(&results).iter().map(|s| s.parse().unwrap()).collect();
@@ -191,13 +191,13 @@ fn update_document_removes_old_tokens() {
         .unwrap();
     store.flush().unwrap();
 
-    let banana = store.search("docs", "banana", false, 10, None, false).unwrap();
+    let banana = store.search("docs", "banana", false, 10, None).unwrap();
     assert!(banana.is_empty(), "banana should have been removed");
 
-    let cherry = store.search("docs", "cherry", false, 10, None, false).unwrap();
+    let cherry = store.search("docs", "cherry", false, 10, None).unwrap();
     assert_eq!(ids(&cherry), vec!["1"]);
 
-    let apple = store.search("docs", "apple", false, 10, None, false).unwrap();
+    let apple = store.search("docs", "apple", false, 10, None).unwrap();
     assert_eq!(ids(&apple), vec!["1"]);
 }
 
@@ -215,7 +215,7 @@ fn search_pagination_edge_cases() {
     }
     store.flush().unwrap();
 
-    let page1 = store.search("docs", "hello", false, 2, None, false).unwrap();
+    let page1 = store.search("docs", "hello", false, 2, None).unwrap();
     assert_eq!(ids(&page1), vec!["a", "b"]);
 
     let page2 = store
@@ -225,7 +225,6 @@ fn search_pagination_edge_cases() {
             false,
             2,
             page1.last().and_then(|v| v["id"].as_str()),
-            false,
         )
         .unwrap();
     assert_eq!(ids(&page2), vec!["c", "d"]);
@@ -237,7 +236,6 @@ fn search_pagination_edge_cases() {
             false,
             2,
             page2.last().and_then(|v| v["id"].as_str()),
-            false,
         )
         .unwrap();
     assert_eq!(ids(&page3), vec!["e"]);
@@ -249,7 +247,6 @@ fn search_pagination_edge_cases() {
             false,
             2,
             page3.last().and_then(|v| v["id"].as_str()),
-            false,
         )
         .unwrap();
     assert!(page4.is_empty());
@@ -274,13 +271,13 @@ fn multiple_collections_isolated() {
         .unwrap();
     store.flush().unwrap();
 
-    let r1 = store.search("a", "hello", false, 10, None, false).unwrap();
+    let r1 = store.search("a", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&r1), vec!["1"]);
 
-    let r2 = store.search("b", "hello", false, 10, None, false).unwrap();
+    let r2 = store.search("b", "hello", false, 10, None).unwrap();
     assert!(r2.is_empty());
 
-    let r3 = store.search("b", "foo", false, 10, None, false).unwrap();
+    let r3 = store.search("b", "foo", false, 10, None).unwrap();
     assert_eq!(ids(&r3), vec!["1"]);
 }
 
@@ -302,7 +299,7 @@ fn delete_all_items_in_collection() {
     store.delete_item("docs", "1").unwrap();
     store.delete_item("docs", "2").unwrap();
 
-    let results = store.search("docs", "hello", false, 10, None, false).unwrap();
+    let results = store.search("docs", "hello", false, 10, None).unwrap();
     assert!(results.is_empty());
 
     let info = store.collection_info("docs").unwrap();
@@ -340,7 +337,7 @@ fn persist_and_reopen() {
             .unwrap()
     };
     let store = Store::new(env, db_path.join("fst"));
-    let results = store.search("docs", "hello", false, 10, None, false).unwrap();
+    let results = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&results), vec!["persist"]);
 
     let list = store.list_collections().unwrap();
@@ -396,11 +393,11 @@ fn export_import_roundtrip() {
     assert_eq!(list.collections.len(), 1);
     assert_eq!(list.collections[0].name, "docs");
 
-    let r1 = store.search("docs", "hello", false, 10, None, false).unwrap();
+    let r1 = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(r1.len(), 1);
     assert_eq!(r1[0]["id"], "a");
 
-    let r2 = store.search("docs", "foo", false, 10, None, false).unwrap();
+    let r2 = store.search("docs", "foo", false, 10, None).unwrap();
     assert_eq!(r2.len(), 1);
     assert_eq!(r2[0]["id"], "b");
 }
@@ -464,11 +461,11 @@ fn export_import_number_collection() {
     let store = Store::new(env, dst_path.join("fst"));
     store.import_snapshot(&data).unwrap();
 
-    let r = store.search("nums", "hello", false, 10, None, false).unwrap();
+    let r = store.search("nums", "hello", false, 10, None).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0]["id"], 42);
 
-    let r = store.search("nums", "world", false, 10, None, false).unwrap();
+    let r = store.search("nums", "world", false, 10, None).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0]["id"], 99);
 }

@@ -129,7 +129,6 @@ pub struct SearchParams {
     pub sort: Option<String>,
     pub take: Option<usize>,
     pub after: Option<String>,
-    pub fuzzy: Option<bool>,
 }
 
 #[derive(Serialize)]

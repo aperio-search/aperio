@@ -19,7 +19,6 @@ pub struct SearchParams<'a> {
     pub sort_desc: bool,
     pub take: usize,
     pub after: Option<&'a str>,
-    pub fuzzy: bool,
     pub fuzzy_max_expansions: usize,
     pub fst_pool: Option<&'a FSTPool>,
 }
@@ -64,7 +63,6 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         sort_desc,
         take,
         after,
-        fuzzy,
         fuzzy_max_expansions,
         fst_pool,
     } = params;
@@ -100,7 +98,7 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         }
 
         // Fuzzy expansion: if exact match has no results, try FST
-        if fuzzy && !has_exact {
+        if !has_exact {
             if let Some(pool) = fst_pool {
                 let similar =
                     pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
@@ -166,7 +164,6 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         sort_desc,
         take,
         after,
-        fuzzy,
         fuzzy_max_expansions,
         fst_pool,
     } = params;
@@ -211,7 +208,7 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         }
 
         // Fuzzy expansion: try FST if exact match has no results
-        if fuzzy && !has_exact {
+        if !has_exact {
             if let Some(pool) = fst_pool {
                 let similar =
                     pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);

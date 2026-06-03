@@ -148,7 +148,6 @@ export class AperioClient {
 	): Promise<SearchResponse> {
 		const query = new URLSearchParams();
 		query.set("q", params.q);
-		if (params.fuzzy !== undefined) query.set("fuzzy", String(params.fuzzy));
 		if (params.sort !== undefined) query.set("sort", params.sort);
 		if (params.take !== undefined) query.set("take", String(params.take));
 		if (params.after !== undefined) query.set("after", params.after);

@@ -67,7 +67,6 @@ curl "http://localhost:3000/collections/posts/search?q=hello+world&sort=asc&take
 | Param | Type | Default | Description |
 |---|---|---|---|
 | `q` | `string` | — | Search query (one or more terms, space-separated) |
-| `fuzzy` | `boolean` | `true` | When `true`, terms with no exact matches are automatically expanded to similar terms via Levenshtein automaton. Set to `false` for exact-match-only |
 | `sort` | `string` | `desc` | Sort by ID: `asc` or `desc` |
 | `take` | `integer` | `20` | Max results (clamped 1 – 100) |
 | `after` | `string` | — | Exclusive cursor ID for cursor-based pagination |

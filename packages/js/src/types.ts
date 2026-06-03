@@ -34,7 +34,6 @@ export interface CollectionInfo {
 
 export interface SearchParams {
 	q: string;
-	fuzzy?: boolean;
 	sort?: "asc" | "desc";
 	take?: number;
 	after?: string;

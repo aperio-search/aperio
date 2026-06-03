@@ -207,7 +207,6 @@ describe("AperioClient", () => {
 
 			const result = await client.search("posts", {
 				q: "hello",
-				fuzzy: false,
 				sort: "asc",
 				take: 50,
 				after: "abc",
@@ -221,7 +220,6 @@ describe("AperioClient", () => {
 				arguments: [url],
 			} = (globalThis.fetch as ReturnType<typeof mock.fn>).mock.calls[0];
 			assert.ok(url.includes("q=hello"));
-			assert.ok(url.includes("fuzzy=false"));
 			assert.ok(url.includes("sort=asc"));
 			assert.ok(url.includes("take=50"));
 			assert.ok(url.includes("after=abc"));
