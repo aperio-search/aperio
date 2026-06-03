@@ -31,7 +31,7 @@
 
 ## What is Aperio?
 
-Aperio is an screamingly fast, ultra-lean search engine built on top of [LMDB](https://www.symas.com/lmdb) (via [`heed`](https://github.com/Kerollmops/heed)) and powered by Rust. It's designed as **a lightweight alternative to Elasticsearch** for applications that need ultra-low latency search keeping memory usage minimal even with massive datasets.
+Aperio is an screamingly fast, ultra-lightweight search engine built on top of [LMDB](https://www.symas.com/lmdb) (via [`heed`](https://github.com/Kerollmops/heed)) and powered by Rust. It's designed as **a lightweight alternative to Elasticsearch** for applications that need ultra-low latency search keeping memory usage minimal even with massive datasets.
 
 ## Features
 
@@ -262,6 +262,6 @@ Treat the Architecture section as a **narrative companion** for developers who e
 
 ## Sponsor
 
-If you find Aperio useful, please consider becoming a sponsor: as an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
+If you find Aperio useful, please consider becoming a sponsor: as an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lightweight, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
 
 If you have a few seconds, a star on GitHub helps us a lot!

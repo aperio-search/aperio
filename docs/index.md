@@ -4,7 +4,7 @@ layout: home
 
 hero:
   name: "Aperio"
-  text: "Screamingly fast, ultra-lean search engine."
+  text: "Screamingly fast, ultra-lightweight search engine."
   actions:
     - theme: brand
       text: Quickstart

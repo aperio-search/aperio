@@ -32,7 +32,7 @@ Aperio is built for those who prioritizes simplicity and performance over featur
 
 ## Sponsor
 
-Love using Aperio? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lean, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
+Love using Aperio? Consider becoming a sponsor! As an independent open-source project, we rely on community backing to keep Aperio screamingly fast, ultra-lightweight, and actively maintained. Take a look at our [GitHub Sponsors](https://github.com/sponsors/andresribeiro) page to see how you can help.
 
 ##
 
