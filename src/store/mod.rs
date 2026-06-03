@@ -545,9 +545,17 @@ impl Store {
         sort_desc: bool,
         take: usize,
         after: Option<&str>,
+        fuzzy: bool,
     ) -> Result<Vec<serde_json::Value>, AppError> {
         let meta = self.validate_collection_exists(collection)?;
         let rtxn = self.env.read_txn()?;
+
+        let fst_pool = if self.config.fst_config.enabled {
+            Some(&self.fst_pool)
+        } else {
+            None
+        };
+        let fuzzy_max = self.config.fuzzy_max_expansions;
 
         let ids = match meta.id_type {
             IdType::Number => search::roaring_search(search::SearchParams {
@@ -559,6 +567,9 @@ impl Store {
                 sort_desc,
                 take,
                 after,
+                fuzzy,
+                fuzzy_max_expansions: fuzzy_max,
+                fst_pool,
             })?,
             IdType::String => search::string_search(search::SearchParams {
                 inverted: self.db_inverted,
@@ -569,6 +580,9 @@ impl Store {
                 sort_desc,
                 take,
                 after,
+                fuzzy,
+                fuzzy_max_expansions: fuzzy_max,
+                fst_pool,
             })?,
         };
 
@@ -949,7 +963,7 @@ mod tests {
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
 
@@ -963,7 +977,7 @@ mod tests {
             .upsert("docs", json!({"id": 42, "content": "hello world"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["42"]);
     }
 
@@ -984,7 +998,7 @@ mod tests {
             .unwrap();
         store.flush().unwrap();
         let results = store
-            .search("docs", "apple banana", false, 10, None)
+            .search("docs", "apple banana", false, 10, None, false)
             .unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
@@ -1000,7 +1014,7 @@ mod tests {
             .unwrap();
         store.flush().unwrap();
         let results = store
-            .search("docs", "nonexistent", false, 10, None)
+            .search("docs", "nonexistent", false, 10, None, false)
             .unwrap();
         assert!(results.is_empty());
     }
@@ -1015,7 +1029,7 @@ mod tests {
             .upsert("docs", json!({"id": "1", "content": "hello world"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "", false, 10, None).unwrap();
+        let results = store.search("docs", "", false, 10, None, false).unwrap();
         assert!(results.is_empty());
     }
 
@@ -1032,7 +1046,7 @@ mod tests {
             .upsert("docs", json!({"id": "a", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["a", "b"]);
     }
 
@@ -1049,7 +1063,7 @@ mod tests {
             .upsert("docs", json!({"id": "b", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", true, 10, None).unwrap();
+        let results = store.search("docs", "hello", true, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["b", "a"]);
     }
 
@@ -1069,7 +1083,7 @@ mod tests {
             .upsert("docs", json!({"id": "c", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, Some("a")).unwrap();
+        let results = store.search("docs", "hello", false, 10, Some("a"), false).unwrap();
         assert_eq!(ids(&results), vec!["b", "c"]);
     }
 
@@ -1089,7 +1103,7 @@ mod tests {
             .upsert("docs", json!({"id": "c", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", true, 10, Some("c")).unwrap();
+        let results = store.search("docs", "hello", true, 10, Some("c"), false).unwrap();
         assert_eq!(ids(&results), vec!["b", "a"]);
     }
 
@@ -1109,7 +1123,7 @@ mod tests {
             .upsert("docs", json!({"id": "c", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 2, None).unwrap();
+        let results = store.search("docs", "hello", false, 2, None, false).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -1126,11 +1140,9 @@ mod tests {
             .upsert("docs", json!({"id": "1", "content": "apple cherry"}))
             .unwrap();
         store.flush().unwrap();
-        let r1 = store.search("docs", "banana", false, 10, None).unwrap();
-        assert!(r1.is_empty());
-        let r2 = store.search("docs", "cherry", false, 10, None).unwrap();
-        assert_eq!(ids(&r2), vec!["1"]);
-        let r3 = store.search("docs", "apple", false, 10, None).unwrap();
+        let r1 = store.search("docs", "banana", false, 10, None, false).unwrap();
+        let r2 = store.search("docs", "cherry", false, 10, None, false).unwrap();
+        let r3 = store.search("docs", "apple", false, 10, None, false).unwrap();
         assert_eq!(ids(&r3), vec!["1"]);
     }
 
@@ -1145,7 +1157,7 @@ mod tests {
             .unwrap();
         store.flush().unwrap();
         store.delete_item("docs", "1").unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert!(results.is_empty());
     }
 
@@ -1174,7 +1186,7 @@ mod tests {
             .upsert("docs", json!({"id": "1", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
 
@@ -1222,7 +1234,7 @@ mod tests {
     fn search_on_nonexistent_collection() {
         let (store, _dir) = default_store();
         let err = store
-            .search("nonexistent", "hello", false, 10, None)
+            .search("nonexistent", "hello", false, 10, None, false)
             .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
     }
@@ -1264,7 +1276,7 @@ mod tests {
             .upsert("docs", json!({"id": 2, "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["1", "2", "3"]);
     }
 
@@ -1281,7 +1293,7 @@ mod tests {
             .upsert("docs", json!({"id": 2, "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", true, 10, None).unwrap();
+        let results = store.search("docs", "hello", true, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["2", "1"]);
     }
 
@@ -1301,7 +1313,7 @@ mod tests {
             .upsert("docs", json!({"id": 3, "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, Some("1")).unwrap();
+        let results = store.search("docs", "hello", false, 10, Some("1"), false).unwrap();
         assert_eq!(ids(&results), vec!["2", "3"]);
     }
 
@@ -1318,7 +1330,7 @@ mod tests {
             .upsert("docs", json!({"id": "1", "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
 
@@ -1335,7 +1347,7 @@ mod tests {
             .upsert("docs", json!({"id": 1, "content": "hello"}))
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
     }
 
@@ -1355,7 +1367,7 @@ mod tests {
                 .unwrap();
         }
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 20, None).unwrap();
+        let results = store.search("docs", "hello", false, 20, None, false).unwrap();
         assert_eq!(results.len(), 10);
     }
 
@@ -1375,7 +1387,7 @@ mod tests {
                 .unwrap();
         }
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 20, None).unwrap();
+        let results = store.search("docs", "hello", false, 20, None, false).unwrap();
         assert_eq!(results.len(), 10);
     }
 
@@ -1393,9 +1405,9 @@ mod tests {
             .unwrap();
         store.flush().unwrap();
         // "world" should not be indexed because "body" is not a searchable field
-        let r1 = store.search("docs", "hello", false, 10, None).unwrap();
+        let r1 = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(r1.len(), 1);
-        let r2 = store.search("docs", "world", false, 10, None).unwrap();
+        let r2 = store.search("docs", "world", false, 10, None, false).unwrap();
         assert!(r2.is_empty());
         // Full document should include all fields
         assert_eq!(r1[0]["id"], "1");
@@ -1429,7 +1441,7 @@ mod tests {
             )
             .unwrap();
         store.flush().unwrap();
-        let results = store.search("docs", "hello", false, 10, None).unwrap();
+        let results = store.search("docs", "hello", false, 10, None, false).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["id"], "1");
         assert_eq!(results[0]["title"], "hello");

@@ -105,13 +105,14 @@ async fn search(
     let sort_desc = params.sort.as_deref().unwrap_or("desc") != "asc";
     let take = params.take.unwrap_or(20).clamp(1, 100);
     let after = params.after.clone();
+    let fuzzy = params.fuzzy.unwrap_or(true);
     let q = params.q;
     let store = Arc::clone(&state.store);
     let t0 = std::time::Instant::now();
     let results = tokio::task::spawn_blocking({
         let collection = collection.clone();
         let q = q.clone();
-        move || store.search(&collection, &q, sort_desc, take, after.as_deref())
+        move || store.search(&collection, &q, sort_desc, take, after.as_deref(), fuzzy)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;

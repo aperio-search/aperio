@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub fst_max_words: Option<usize>,
     pub fst_max_size_kb: Option<usize>,
     pub fst_consolidate_interval_secs: Option<u64>,
+    pub fuzzy_max_expansions: Option<usize>,
 }
 
 impl AppConfig {
@@ -59,6 +60,7 @@ impl AppConfig {
             max_queue_batch_size: self.max_queue_batch_size.unwrap_or(5000),
             fst_config: base,
             fst_consolidate_interval: Duration::from_secs(60),
+            fuzzy_max_expansions: self.fuzzy_max_expansions.unwrap_or(3),
         }
     }
 }
@@ -177,6 +179,7 @@ search_api_key = "custom-search-key"
             fst_max_words: None,
             fst_max_size_kb: None,
             fst_consolidate_interval_secs: None,
+            fuzzy_max_expansions: None,
         };
         let store_cfg = app_cfg.merge_into_store_config();
         assert_eq!(store_cfg.min_token_length, 5);

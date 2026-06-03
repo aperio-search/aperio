@@ -56,6 +56,14 @@ Aperio maintains a per-collection **Finite State Transducer** (FST) as a vocabul
 | `fst_max_size_kb` | `integer` | `2048` | Maximum FST file size in kilobytes |
 | `fst_consolidate_interval_secs` | `integer` | `300` | Seconds of inactivity before a dirty FST is consolidated to disk |
 
+## Fuzzy / Typo-Tolerant Search
+
+When enabled (default), the search endpoint automatically expands query terms that have no exact matches to similar terms using Levenshtein distance. The [distance threshold](https://en.wikipedia.org/wiki/Levenshtein_distance) scales with word length (up to 3 edits for long words). Expansion is **zero-cost** for terms that already have exact matches — the FST is only queried for terms with no results.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `fuzzy_max_expansions` | `integer` | `3` | Maximum number of similar terms to try per query term when no exact matches are found |
+
 ## Server & Authentication
 
 | Field | Type | Default | Description |

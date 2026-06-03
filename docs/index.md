@@ -17,9 +17,12 @@ features:
   - title: Screamingly Fast
     icon: ⚡️
     details: Engineered for performance, delivering ultra-low latency search results.
+  - title: Typo-Tolerant Search
+    icon: ✏️
+    details: Forgiving full-text search with automatic typo correction via Levenshtein automaton — enabled by default.
   - title: Autocomplete / Suggested Terms
     icon: 🔮
-    details: Suggest indexed terms as users type.
+    details: Suggest indexed terms as users type with prefix matching — powered by an on-disk Finite State Transducer.
   - title: Full Unicode Support
     icon: 🌐
     details: Built-in normalization and encoding compatibility to handle global data flawlessly.
