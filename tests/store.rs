@@ -13,7 +13,7 @@ fn create_store() -> (Store, TempDir) {
             .open(dir.path())
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, dir.path().join("fst"));
     (store, dir)
 }
 
@@ -26,7 +26,7 @@ fn create_store_with_config(config: StoreConfig) -> (Store, TempDir) {
             .open(dir.path())
             .unwrap()
     };
-    let store = Store::with_config(env, config);
+    let store = Store::with_config(env, config, dir.path().join("fst"));
     (store, dir)
 }
 
@@ -319,7 +319,7 @@ fn persist_and_reopen() {
             .open(&db_path)
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, db_path.join("fst"));
     store
         .create_collection("docs", "string", &["content".into()])
         .unwrap();
@@ -336,7 +336,7 @@ fn persist_and_reopen() {
             .open(&db_path)
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, db_path.join("fst"));
     let results = store.search("docs", "hello", false, 10, None).unwrap();
     assert_eq!(ids(&results), vec!["persist"]);
 
@@ -358,7 +358,7 @@ fn export_import_roundtrip() {
             .open(&src_path)
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, src_path.join("fst"));
     store
         .create_collection("docs", "string", &["content".into()])
         .unwrap();
@@ -385,7 +385,7 @@ fn export_import_roundtrip() {
             .open(&dst_path)
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, dst_path.join("fst"));
     store.import_snapshot(&data).unwrap();
 
     // Verify
@@ -412,7 +412,7 @@ fn export_empty_database() {
             .open(dir.path())
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, dir.path().join("fst"));
     let data = store.export_snapshot().unwrap();
     // Should produce valid export data (empty keyspace list)
     assert!(
@@ -434,7 +434,7 @@ fn export_import_number_collection() {
             .open(&src_path)
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, src_path.join("fst"));
     store
         .create_collection("nums", "number", &["val".into()])
         .unwrap();
@@ -458,7 +458,7 @@ fn export_import_number_collection() {
             .open(&dst_path)
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, dst_path.join("fst"));
     store.import_snapshot(&data).unwrap();
 
     let r = store.search("nums", "hello", false, 10, None).unwrap();
@@ -480,7 +480,190 @@ fn export_import_bad_magic() {
             .open(dir.path())
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, dir.path().join("fst"));
     let err = store.import_snapshot(b"garbage data").unwrap_err();
     assert!(err.to_string().contains("bad magic"), "got: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// FST / suggest integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn suggest_returns_indexed_terms() {
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    for (id, text) in [("1", "apple banana"), ("2", "application"), ("3", "appetite")] {
+        store
+            .upsert("docs", json!({"id": id, "content": text}))
+            .unwrap();
+    }
+    store.flush().unwrap();
+
+    // Wait for FST consolidation to happen by manually triggering
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let results = store.suggest("docs", "app", 10).unwrap();
+    assert_eq!(results.len(), 3);
+    assert!(results.contains(&"apple".to_string()));
+    assert!(results.contains(&"application".to_string()));
+    assert!(results.contains(&"appetite".to_string()));
+}
+
+#[test]
+fn suggest_returns_empty_for_no_match() {
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "1", "content": "hello world"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let results = store.suggest("docs", "xyz", 10).unwrap();
+    assert!(results.is_empty());
+}
+
+#[test]
+fn suggest_returns_empty_for_nonexistent_collection() {
+    let (store, _dir) = create_store();
+    let err = store.suggest("nonexistent", "hello", 10).unwrap_err();
+    assert!(err.to_string().contains("not found"));
+}
+
+#[test]
+fn suggest_respects_limit() {
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    for i in 0..10u64 {
+        store
+            .upsert("docs", json!({"id": i.to_string(), "content": "a".repeat(3 + i as usize)}))
+            .unwrap();
+    }
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let results = store.suggest("docs", "a", 3).unwrap();
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn fst_terms_not_orphaned_on_single_delete() {
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "1", "content": "apple banana"}))
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "2", "content": "apple cherry"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    assert!(store.fst_pool.contains("docs", "apple"));
+    assert!(store.fst_pool.contains("docs", "banana"));
+    assert!(store.fst_pool.contains("docs", "cherry"));
+
+    // Delete doc 1 — "banana" is only in doc 1 but FST is best-effort
+    // and may still contain it until next full consolidation
+    store.delete_item("docs", "1").unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    // FST is a superset: orphaned terms may remain, shared terms definitely exist
+    assert!(store.fst_pool.contains("docs", "apple"));
+    assert!(store.fst_pool.contains("docs", "cherry"));
+}
+
+#[test]
+fn fst_terms_removed_on_document_update() {
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "1", "content": "apple banana"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    assert!(store.fst_pool.contains("docs", "banana"));
+
+    // Update — remove "banana", add "cherry"
+    store
+        .upsert("docs", json!({"id": "1", "content": "apple cherry"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    assert!(!store.fst_pool.contains("docs", "banana"));
+    assert!(store.fst_pool.contains("docs", "cherry"));
+    assert!(store.fst_pool.contains("docs", "apple"));
+}
+
+#[test]
+fn suggest_works_with_number_collection() {
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "number", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": 1, "content": "apple banana"}))
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": 2, "content": "application test"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let results = store.suggest("docs", "app", 10).unwrap();
+    assert!(results.contains(&"apple".to_string()));
+    assert!(results.contains(&"application".to_string()));
+}
+
+#[test]
+fn suggest_fst_persists_across_reopen() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("aperio");
+    std::fs::create_dir_all(&db_path).unwrap();
+
+    // First session
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&db_path)
+            .unwrap()
+    };
+    let store = Store::new(env, db_path.join("fst"));
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "1", "content": "apple banana"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+    assert!(store.fst_pool.contains("docs", "apple"));
+    drop(store);
+
+    // Second session — FST should still be on disk
+    let env = unsafe {
+        heed::EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(4)
+            .open(&db_path)
+            .unwrap()
+    };
+    let store = Store::new(env, db_path.join("fst"));
+    assert!(store.fst_pool.contains("docs", "apple"));
+    let results = store.suggest("docs", "app", 10).unwrap();
+    assert!(results.contains(&"apple".to_string()));
 }

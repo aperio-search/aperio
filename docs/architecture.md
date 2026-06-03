@@ -9,10 +9,10 @@
 │                   HTTP (port 3000)                │
 ├───────────────────────────────────────────────────┤
 │          Axum Router (src/routes.rs)              │
-│         /collections  /search  /items             │
+│     /collections  /search  /suggest  /items       │
 ├───────────────────────────────────────────────────┤
 │            Store Engine (src/store/)              │
-│  Inverted Index  ·  Tokenization  ·  ID Strategy  │
+│  Inverted Index  ·  FST Vocabulary  ·  ID Strategy│
 ├───────────────────────────────────────────────────┤
 │    Auth (src/auth.rs)  ·  Backup (src/backup.rs)  │
 ├───────────────────────────────────────────────────┤
@@ -26,7 +26,7 @@ The server has four layers:
 
 1. **HTTP Layer** — Axum router exposing REST endpoints.
 2. **Auth & Backup** — API key authentication (`src/auth.rs`) and snapshot export/import (`src/backup.rs`).
-3. **Store Engine** — Core logic: tokenization, inverted index management, search/insert (`src/store/` sub-modules).
+3. **Store Engine** — Core logic: tokenization, inverted index, FST vocabulary index, search/insert (`src/store/` sub-modules).
 4. **Persistence Layer** — [LMDB](https://www.symas.com/lmdb) memory-mapped database for on-disk storage.
 
 ## HTTP Layer (`src/routes.rs`)
@@ -43,6 +43,7 @@ An Axum `Router` maps endpoints to handler functions that delegate to the `Store
 | `POST` | `/collections/{collection}/items` | Upsert document |
 | `DELETE` | `/collections/{collection}/items/{id}` | Delete document |
 | `GET` | `/collections/{collection}/search?q=...` | Search documents |
+| `GET` | `/collections/{collection}/suggest?q=...` | Suggest indexed terms matching a prefix |
 | `POST` | `/backup/export` | Export database snapshot to a file in the dumps folder |
 | `POST` | `/backup/import` | Import a snapshot from the dumps folder |
 | `GET` | `/queue` | Pending index queue depth |
@@ -62,7 +63,8 @@ The `Store` struct (in `src/store/mod.rs`) is the heart of Aperio. It holds:
 - **`next_seq: AtomicU64`** — monotonic sequence counter for the indexing queue.
 
 The store logic is split across sub-modules:
-- `src/store/config.rs` — `StoreConfig`, `IdType`, `CollectionMeta`, `PostingShard`, `QueuedIndex`.
+- `src/store/config.rs` — `StoreConfig`, `FSTConfig`, `IdType`, `CollectionMeta`, `PostingShard`, `QueuedIndex`.
+- `src/store/fst.rs` — per-collection FST vocabulary index (push/pop, consolidation, prefix/fuzzy search).
 - `src/store/posting_list.rs` — shard-based posting list operations for both ID strategies.
 - `src/store/search.rs` — search execution (intersection, cursor pagination) for string and number IDs.
 
@@ -98,6 +100,18 @@ A `Vec<u64>` would be faster for posting-list operations, but `u64` can't repres
 #### Number IDs
 
 Posting lists use [RoaringTreemap](https://github.com/RoaringBitmap/roaring-rs) bitmaps, sharded at `max_roaring_shard_size` (default 100,000). Bitmaps offer compact storage and fast bitwise intersection for multi-term queries.
+
+### FST Vocabulary Index (`src/store/fst.rs`)
+
+Each collection has an on-disk [Finite State Transducer](https://docs.rs/fst) (FST) that stores the set of all indexed terms. The FST is built with the [`fst`](https://docs.rs/fst) crate and enables **term suggestion** (`GET /collections/{name}/suggest?q=...`).
+
+The FST uses the same **pending push/pop + consolidation** pattern Sonic's FST uses (since FSTs are immutable once built):
+
+- When `process_pending_queue()` indexes a batch of documents, new terms are pushed to an in-memory pending set and removed terms are added to a pop set.
+- A background task periodically consolidates: it reads the old FST from disk, merges it with pending changes (sorted merge of old FST stream + pending pushes, minus popped words), writes a new FST to a `.tmp` file, then atomically renames it to the final path.
+- On restart, the FST is memory-mapped from its `.fst` file on disk.
+
+Term suggestion uses `fst::automaton::StartsWith` (prefix match) for autocomplete-style results. The FST is separate from LMDB and lives at `{DATA_DIR}/fst/{collection_name}.fst`.
 
 ### Search Execution
 
@@ -181,6 +195,14 @@ Client → POST /collections/{collection}/items
         → add new posting list entries to `inverted`
         → delete queue entry
       → commit single LMDB write transaction
+      → push new terms to FST pending set (per collection)
+      → pop removed terms from FST pending set (per collection)
+
+  (separate consolidation ticker)
+    → fst_pool.consolidate_dirty()
+      → for each dirty collection FST:
+        → merge old FST + pending pushes − pending pops
+        → write to .fst.tmp, atomically rename to .fst
 ```
 
 ## Data Flow: Search
@@ -198,6 +220,19 @@ Client → GET /collections/{collection}/search?q=...
       → apply after-cursor, sort, limit
       → look up full JSON docs from `docs` database
       → return Vec<serde_json::Value>
+```
+
+### Data Flow: Suggest
+
+```
+Client → GET /collections/{collection}/suggest?q=app
+  → routes::suggest()
+    → store.suggest(collection, prefix, take)
+      → validate collection exists
+      → fst_pool.suggest_prefix(collection, prefix, take)
+        → Str::new(prefix).starts_with() automaton
+        → stream results from FST, cap at take
+      → return Vec<String>
 ```
 
 Treat this page as a **narrative companion** for developers who enjoy reading about low level engineering, not as operational documentation you would rely on for debugging or performance tuning. **If something here contradicts the code, the code wins.**

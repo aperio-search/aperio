@@ -19,7 +19,7 @@ fn test_app() -> (Router, TempDir, Arc<Store>) {
             .open(dir.path())
             .unwrap()
     };
-    let store = Arc::new(Store::new(env));
+    let store = Arc::new(Store::new(env, dir.path().join("fst")));
     let auth = aperio::auth::AuthConfig::default();
     let dumps = dir.path().join("dumps");
     std::fs::create_dir_all(&dumps).unwrap();
@@ -39,7 +39,7 @@ fn test_app_no_dumps() -> (Router, TempDir, Arc<Store>) {
             .open(dir.path())
             .unwrap()
     };
-    let store = Arc::new(Store::new(env));
+    let store = Arc::new(Store::new(env, dir.path().join("fst")));
     let auth = aperio::auth::AuthConfig::default();
     (routes::create_router(store.clone(), auth, None), dir, store)
 }
@@ -614,7 +614,7 @@ async fn export_endpoint_main_key() {
             .open(import_dir.path())
             .unwrap()
     };
-    let store = Store::new(env);
+    let store = Store::new(env, import_dir.path().join("fst"));
     let data = std::fs::read(&dumps_path).unwrap();
     store.import_snapshot(&data).unwrap();
 
@@ -639,7 +639,7 @@ async fn export_and_import_roundtrip_via_endpoint() {
             .open(&src_path)
             .unwrap()
     };
-    let store1 = Arc::new(Store::new(env1));
+    let store1 = Arc::new(Store::new(env1, src_path.join("fst")));
     let auth1 = aperio::auth::AuthConfig::default();
     let app1 = routes::create_router(store1.clone(), auth1, Some(dumps.clone()));
 
@@ -671,7 +671,7 @@ async fn export_and_import_roundtrip_via_endpoint() {
             .open(&dst_path)
             .unwrap()
     };
-    let store2 = Arc::new(Store::new(env2));
+    let store2 = Arc::new(Store::new(env2, dst_path.join("fst")));
     let auth2 = aperio::auth::AuthConfig::default();
     let app2 = routes::create_router(store2, auth2, Some(dumps));
 
@@ -728,4 +728,96 @@ async fn import_without_dumps_folder_returns_error() {
     let req = main_key_post("/backup/import", json!({"name": "any.bin"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// Suggest endpoint tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn suggest_returns_terms() {
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    for (id, text) in [("1", "apple banana"), ("2", "application")] {
+        let req = json_request(
+            Method::POST,
+            "/collections/docs/items",
+            json!({"id": id, "content": text}),
+        );
+        send(&app, req).await;
+    }
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let (_status, body) = send(&app, get_request("/collections/docs/suggest?q=app")).await;
+    let results = body["results"].as_array().unwrap();
+    assert!(results.iter().any(|r| r == "apple"));
+    assert!(results.iter().any(|r| r == "application"));
+}
+
+#[tokio::test]
+async fn suggest_returns_empty_with_no_match() {
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    store
+        .upsert("docs", json!({"id": "1", "content": "hello world"}))
+        .unwrap();
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let (_status, body) = send(&app, get_request("/collections/docs/suggest?q=xyz")).await;
+    assert_eq!(body["results"], json!([]));
+}
+
+#[tokio::test]
+async fn suggest_on_nonexistent_collection() {
+    let (app, _dir, _store) = test_app();
+    let (status, _body) = send(&app, get_request("/collections/nope/suggest?q=hello")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn suggest_with_search_key() {
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": "1", "content": "apple banana"}),
+    );
+    send(&app, req).await;
+    store.flush().unwrap();
+    store.fst_pool.consolidate("docs").unwrap();
+
+    let (_status, body) = send(&app, search_key_get("/collections/docs/suggest?q=app")).await;
+    let results = body["results"].as_array().unwrap();
+    assert!(results.iter().any(|r| r == "apple"));
+}
+
+#[tokio::test]
+async fn suggest_requires_auth() {
+    let (app, _dir, _store) = test_app();
+    let (status, _body) = send(&app, noauth_get("/collections/docs/suggest?q=hello")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

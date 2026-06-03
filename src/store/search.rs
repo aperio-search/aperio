@@ -1,10 +1,12 @@
-use rayon::prelude::*;
 use roaring::{MultiOps, RoaringTreemap};
+
+use std::collections::BTreeSet;
 
 use crate::error::AppError;
 
 use super::DbBytes;
-use super::config::ArchivedPostingShard;
+use super::config::{ArchivedPostingShard, PostingShard};
+use super::fst::FSTPool;
 use super::roaring_from_slice;
 use super::tokenize;
 
@@ -17,25 +19,18 @@ pub struct SearchParams<'a> {
     pub sort_desc: bool,
     pub take: usize,
     pub after: Option<&'a str>,
+    pub fuzzy_max_expansions: usize,
+    pub fst_pool: Option<&'a FSTPool>,
 }
 
 struct WordIterState {
-    indices: Vec<usize>,
-    shard_pos: isize,
     cur_shard_data: Option<Vec<u8>>,
     cur_pos: usize,
 }
 
 impl WordIterState {
-    fn new(indices: Vec<usize>, desc: bool) -> Self {
-        let shard_pos = if desc {
-            indices.len().saturating_sub(1) as isize
-        } else {
-            0
-        };
+    fn new() -> Self {
         Self {
-            indices,
-            shard_pos,
             cur_shard_data: None,
             cur_pos: 0,
         }
@@ -54,9 +49,6 @@ impl WordIterState {
         shard.ids.get(self.cur_pos).map(|s| s.as_str())
     }
 
-    fn ids_len(&self) -> usize {
-        self.archived_shard().map(|s| s.ids.len()).unwrap_or(0)
-    }
 }
 
 use super::posting_list;
@@ -71,6 +63,8 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         sort_desc,
         take,
         after,
+        fuzzy_max_expansions,
+        fst_pool,
     } = params;
     let tokens: Vec<String> = tokenize(query, config_min_token_length)
         .into_iter()
@@ -79,50 +73,61 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         return Ok(Vec::new());
     }
 
-    let mut word_shards: Vec<(String, Vec<usize>)> = tokens
-        .iter()
-        .map(|w| {
-            let indices =
-                posting_list::list_shard_indices(inverted, txn, collection, w).unwrap_or_default();
-            (w.clone(), indices)
-        })
-        .collect();
-    word_shards.sort_by_key(|a| a.1.len());
-    if word_shards.first().is_none_or(|(_, idx)| idx.is_empty()) {
-        return Ok(Vec::new());
-    }
+    // For each query token, collect all doc IDs (exact + fuzzy expansions).
+    // Then intersect across tokens.
+    let mut word_bitmaps: Vec<RoaringTreemap> = Vec::with_capacity(tokens.len());
 
-    let word_shard_data: Vec<Vec<Vec<u8>>> = word_shards
-        .iter()
-        .map(|(word, indices)| {
-            indices
-                .iter()
-                .filter_map(|&shard_idx| {
-                    let key = posting_list::shard_key(collection, word, shard_idx);
-                    match inverted.get(txn, key.as_slice()) {
-                        Ok(Some(v)) => Some(v),
-                        _ => None,
+    for token in &tokens {
+        let exact_indices =
+            posting_list::list_shard_indices(inverted, txn, collection, token).unwrap_or_default();
+
+        let has_exact = !exact_indices.is_empty();
+
+        // Load exact match bitmap
+        let mut token_bitmap = RoaringTreemap::new();
+        if has_exact {
+            // Load all exact shards
+            for &shard_idx in &exact_indices {
+                let key = posting_list::shard_key(collection, token, shard_idx);
+                if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
+                    if let Ok(bitmap) = roaring_from_slice(&data) {
+                        token_bitmap |= &bitmap;
                     }
-                })
-                .collect()
-        })
-        .collect();
-
-    let word_bitmaps: Vec<RoaringTreemap> = word_shard_data
-        .par_iter()
-        .map(|shard_data| -> Result<RoaringTreemap, AppError> {
-            let mut word_bitmap = RoaringTreemap::new();
-            for data in shard_data {
-                if let Ok(bitmap) = roaring_from_slice(data) {
-                    word_bitmap |= &bitmap;
                 }
             }
-            Ok(word_bitmap)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        }
 
+        // Fuzzy expansion: if exact match has no results, try FST
+        if !has_exact {
+            if let Some(pool) = fst_pool {
+                let similar =
+                    pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
+                for similar_term in &similar {
+                    let sim_indices = posting_list::list_shard_indices(
+                        inverted, txn, collection, similar_term,
+                    )
+                    .unwrap_or_default();
+                    for &shard_idx in &sim_indices {
+                        let key =
+                            posting_list::shard_key(collection, similar_term, shard_idx);
+                        if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
+                            if let Ok(bitmap) = roaring_from_slice(&data) {
+                                token_bitmap |= &bitmap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if token_bitmap.is_empty() {
+            return Ok(Vec::new());
+        }
+        word_bitmaps.push(token_bitmap);
+    }
+
+    word_bitmaps.sort_by_key(|b| b.len());
     let bitmap = word_bitmaps.iter().intersection();
-
     let after_val = after.and_then(|a| a.parse::<u64>().ok());
     let iter: Box<dyn Iterator<Item = u64>> = if sort_desc {
         Box::new(bitmap.into_iter().rev())
@@ -159,6 +164,8 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         sort_desc,
         take,
         after,
+        fuzzy_max_expansions,
+        fst_pool,
     } = params;
     let tokens: Vec<String> = tokenize(query, config_min_token_length)
         .into_iter()
@@ -167,49 +174,151 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         return Ok(Vec::new());
     }
 
-    let mut word_shards: Vec<(String, Vec<usize>)> = tokens
-        .iter()
-        .map(|w| {
-            let indices =
-                posting_list::list_shard_indices(inverted, txn, collection, w).unwrap_or_default();
-            (w.clone(), indices)
-        })
-        .collect();
-    word_shards.sort_by_key(|a| a.1.len());
-    if word_shards.first().is_none_or(|(_, idx)| idx.is_empty()) {
-        return Ok(Vec::new());
+    // For each query token, build a unified sorted list of all unique doc IDs
+    // (exact match + fuzzy expansions). Store them as "virtual shards" in a
+    // map so WordIterState can reference them.
+    #[derive(Default)]
+    struct VirtualShard {
+        ids: Vec<String>,
     }
 
-    let mut iters: Vec<WordIterState> = word_shards
-        .iter()
-        .map(|(word, indices)| -> Result<WordIterState, AppError> {
-            let mut state = WordIterState::new(indices.clone(), sort_desc);
-            if !sort_desc {
-                load_first_shard(inverted, txn, collection, word, &mut state)?;
-            } else {
-                load_last_shard(inverted, txn, collection, word, &mut state)?;
+    let mut virtual_shards: Vec<(String, VirtualShard)> = Vec::with_capacity(tokens.len());
+
+    for token in &tokens {
+        let mut all_ids = BTreeSet::new();
+
+        let exact_indices =
+            posting_list::list_shard_indices(inverted, txn, collection, token).unwrap_or_default();
+        let has_exact = !exact_indices.is_empty();
+
+        // Collect exact-match doc IDs
+        if has_exact {
+            for &shard_idx in &exact_indices {
+                let key = posting_list::shard_key(collection, token, shard_idx);
+                if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
+                    if let Ok(shard) =
+                        rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data)
+                    {
+                        for id in shard.ids.iter() {
+                            all_ids.insert(id.to_string());
+                        }
+                    }
+                }
             }
+        }
+
+        // Fuzzy expansion: try FST if exact match has no results
+        if !has_exact {
+            if let Some(pool) = fst_pool {
+                let similar =
+                    pool.suggest_fuzzy(collection, token, fuzzy_max_expansions, None);
+                for similar_term in &similar {
+                    let sim_indices = posting_list::list_shard_indices(
+                        inverted, txn, collection, similar_term,
+                    )
+                    .unwrap_or_default();
+                    for &shard_idx in &sim_indices {
+                        let key =
+                            posting_list::shard_key(collection, similar_term, shard_idx);
+                        if let Ok(Some(data)) = inverted.get(txn, key.as_slice()) {
+                            if let Ok(shard) = rkyv::access::<
+                                ArchivedPostingShard,
+                                rkyv::rancor::Error,
+                            >(&data)
+                            {
+                                for id in shard.ids.iter() {
+                                    all_ids.insert(id.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if all_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build a virtual shard with sorted, deduped IDs
+        let ids: Vec<String> = all_ids.into_iter().collect();
+        virtual_shards.push((token.clone(), VirtualShard { ids }));
+    }
+
+    // Sort tokens by posting list size (rarest first) — but don't use term
+    // itself after sort since we need the VirtualShard data to stay aligned
+    virtual_shards.sort_by_key(|(_, shard)| shard.ids.len());
+
+    // Encode each virtual shard with rkyv and set up iterators
+    let mut encoded_shards: Vec<Vec<u8>> = Vec::new();
+    for (_, shard) in &virtual_shards {
+        let ps = PostingShard {
+            ids: shard.ids.clone(),
+        };
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&ps)
+            .map(|av| av.to_vec())
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        encoded_shards.push(bytes);
+    }
+
+    // Sort by shard size (rarest first) — keep virtual_shards and encoded_shards
+    // aligned by sorting all three together
+    let mut combined: Vec<_> = virtual_shards
+        .iter()
+        .enumerate()
+        .map(|(i, (word, shard))| (word.clone(), shard.ids.len(), i))
+        .collect();
+    combined.sort_by_key(|(_, len, _)| *len);
+
+    let mut iters: Vec<WordIterState> = combined
+        .iter()
+        .map(|(_word, _, idx)| -> Result<WordIterState, AppError> {
+            let mut state = WordIterState::new();
+            state.cur_shard_data = Some(encoded_shards[*idx].clone());
+            state.cur_pos = if sort_desc {
+                // Point to last element for desc iteration
+                if let Ok(shard) =
+                    rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(
+                        &encoded_shards[*idx],
+                    )
+                {
+                    if !shard.ids.is_empty() {
+                        shard.ids.len() - 1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
             Ok(state)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     if let Some(cursor) = after {
-        for (i, (word, _)) in word_shards.iter().enumerate() {
-            skip_past_cursor(
-                inverted,
-                txn,
-                collection,
-                word,
+        for (i, (_word, _, idx)) in combined.iter().enumerate() {
+            skip_past_cursor_virtual(
                 cursor,
                 &mut iters[i],
+                &encoded_shards[*idx],
                 sort_desc,
             )?;
         }
     }
 
+    // The rest of the search loop uses real shard functions but the data is
+    // already loaded in cur_shard_data. Since there's only one virtual shard
+    // (index 0), advance_shard will stop immediately when exhausted.
+    // We can reuse the existing functions by passing dummy keys, but we need
+    // them to use the already-loaded cur_shard_data rather than reading LMDB.
+    // To keep things simple, we implement the pivot loop directly here.
+
     let mut results: Vec<String> = Vec::with_capacity(take);
 
     loop {
+        // Find the pivot (rarest ID across all iterators)
         let pivot_str = {
             let mut best: Option<&str> = None;
             let mut any_exhausted = false;
@@ -244,18 +353,11 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
             None => break,
         };
 
+        // Check if all iterators have the pivot
         let mut all_have = true;
 
-        for (i, state) in iters.iter_mut().enumerate() {
-            seek_to(
-                inverted,
-                txn,
-                collection,
-                &word_shards[i].0,
-                state,
-                &pivot,
-                sort_desc,
-            )?;
+        for state in iters.iter_mut() {
+            seek_in_shard(state, &pivot, sort_desc)?;
             match state.current() {
                 None => {
                     all_have = false;
@@ -275,15 +377,8 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
             if results.len() >= take {
                 break;
             }
-            for (i, state) in iters.iter_mut().enumerate() {
-                advance_iter(
-                    inverted,
-                    txn,
-                    collection,
-                    &word_shards[i].0,
-                    state,
-                    sort_desc,
-                )?;
+            for state in iters.iter_mut() {
+                advance_in_virtual_shard(state, sort_desc);
             }
         }
     }
@@ -291,130 +386,8 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
     Ok(results)
 }
 
-fn get_shard_data(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
-    shard_idx: usize,
-) -> Result<Option<Vec<u8>>, AppError> {
-    let key = posting_list::shard_key(collection, word, shard_idx);
-    Ok(inverted.get(txn, key.as_slice())?)
-}
-
-fn load_first_shard(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
-    state: &mut WordIterState,
-) -> Result<(), AppError> {
-    while (state.shard_pos as usize) < state.indices.len() {
-        let idx = state.indices[state.shard_pos as usize];
-        if let Some(data) = get_shard_data(inverted, txn, collection, word, idx)? {
-            state.cur_shard_data = Some(data);
-            if state.archived_shard().is_some_and(|s| !s.ids.is_empty()) {
-                state.cur_pos = 0;
-                return Ok(());
-            }
-            state.cur_shard_data = None;
-        }
-        state.shard_pos += 1;
-    }
-    state.cur_shard_data = None;
-    state.cur_pos = 0;
-    Ok(())
-}
-
-fn load_last_shard(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
-    state: &mut WordIterState,
-) -> Result<(), AppError> {
-    while state.shard_pos >= 0 {
-        let idx = state.indices[state.shard_pos as usize];
-        if let Some(data) = get_shard_data(inverted, txn, collection, word, idx)? {
-            state.cur_shard_data = Some(data);
-            let maybe_len = state.ids_len();
-            if maybe_len > 0 {
-                state.cur_pos = maybe_len.saturating_sub(1);
-                return Ok(());
-            }
-            state.cur_shard_data = None;
-        }
-        state.shard_pos -= 1;
-    }
-    state.cur_shard_data = None;
-    state.cur_pos = 0;
-    Ok(())
-}
-
-fn advance_shard(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
-    state: &mut WordIterState,
-    desc: bool,
-) -> Result<(), AppError> {
-    loop {
-        if desc {
-            state.shard_pos -= 1;
-            if state.shard_pos < 0 {
-                state.cur_shard_data = None;
-                state.cur_pos = 0;
-                return Ok(());
-            }
-        } else {
-            state.shard_pos += 1;
-            if (state.shard_pos as usize) >= state.indices.len() {
-                state.cur_shard_data = None;
-                state.cur_pos = 0;
-                return Ok(());
-            }
-        }
-        let idx = state.indices[state.shard_pos as usize];
-        if let Some(data) = get_shard_data(inverted, txn, collection, word, idx)? {
-            state.cur_shard_data = Some(data);
-            let maybe_len = state.ids_len();
-            if maybe_len > 0 {
-                state.cur_pos = if desc { maybe_len.saturating_sub(1) } else { 0 };
-                return Ok(());
-            }
-            state.cur_shard_data = None;
-        }
-    }
-}
-
-fn advance_iter(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
-    state: &mut WordIterState,
-    desc: bool,
-) -> Result<(), AppError> {
-    if desc {
-        if state.cur_pos == 0 {
-            return advance_shard(inverted, txn, collection, word, state, desc);
-        }
-        state.cur_pos -= 1;
-    } else {
-        state.cur_pos += 1;
-        if state.cur_pos >= state.ids_len() {
-            return advance_shard(inverted, txn, collection, word, state, desc);
-        }
-    }
-    Ok(())
-}
-
-fn seek_to(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
+/// Seek within a single virtual shard (binary search on the sorted IDs).
+fn seek_in_shard(
     state: &mut WordIterState,
     target: &str,
     desc: bool,
@@ -430,118 +403,116 @@ fn seek_to(
             }
         }
 
-        if let Some(shard) = state.archived_shard() {
-            let ids = &shard.ids;
-            let len = ids.len();
-            if desc {
-                let mut lo = 0usize;
-                let mut hi = len;
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    match ids.get(mid) {
-                        Some(s) if s.as_str() <= target => lo = mid + 1,
-                        _ => hi = mid,
+        if let Some(ref data) = state.cur_shard_data {
+            if let Ok(shard) =
+                rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data)
+            {
+                let ids = &shard.ids;
+                let len = ids.len();
+                if desc {
+                    let mut lo = 0usize;
+                    let mut hi = len;
+                    while lo < hi {
+                        let mid = (lo + hi) / 2;
+                        match ids.get(mid) {
+                            Some(s) if s.as_str() <= target => lo = mid + 1,
+                            _ => hi = mid,
+                        }
                     }
-                }
-                if lo > 0 {
-                    state.cur_pos = lo - 1;
-                    return Ok(());
-                }
-            } else {
-                let mut lo = 0usize;
-                let mut hi = len;
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    match ids.get(mid) {
-                        Some(s) if s.as_str() < target => lo = mid + 1,
-                        _ => hi = mid,
+                    if lo > 0 {
+                        state.cur_pos = lo - 1;
+                        return Ok(());
                     }
-                }
-                if lo < len {
-                    state.cur_pos = lo;
-                    return Ok(());
+                } else {
+                    let mut lo = 0usize;
+                    let mut hi = len;
+                    while lo < hi {
+                        let mid = (lo + hi) / 2;
+                        match ids.get(mid) {
+                            Some(s) if s.as_str() < target => lo = mid + 1,
+                            _ => hi = mid,
+                        }
+                    }
+                    if lo < len {
+                        state.cur_pos = lo;
+                        return Ok(());
+                    }
                 }
             }
         }
 
-        advance_shard(inverted, txn, collection, word, state, desc)?;
+        // No more IDs — mark as exhausted
+        state.cur_shard_data = None;
+        state.cur_pos = 0;
+        return Ok(());
     }
 }
 
-fn skip_past_cursor(
-    inverted: DbBytes,
-    txn: &heed::RoTxn,
-    collection: &str,
-    word: &str,
+/// Advance by one position in a single virtual shard.
+fn advance_in_virtual_shard(state: &mut WordIterState, desc: bool) {
+    if desc {
+        if state.cur_pos == 0 {
+            state.cur_shard_data = None;
+        } else {
+            state.cur_pos -= 1;
+        }
+    } else if let Some(ref data) = state.cur_shard_data {
+        let len = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(data)
+            .map(|s| s.ids.len())
+            .unwrap_or(0);
+        state.cur_pos += 1;
+        if state.cur_pos >= len {
+            state.cur_shard_data = None;
+        }
+    }
+}
+
+/// Apply the `after` cursor to a virtual shard.
+fn skip_past_cursor_virtual(
     cursor: &str,
     state: &mut WordIterState,
+    encoded: &[u8],
     desc: bool,
 ) -> Result<(), AppError> {
-    if state.indices.is_empty() {
-        return Ok(());
-    }
-
-    let shard_idx =
-        posting_list::find_shard_for_id(inverted, txn, collection, word, cursor, &state.indices)?;
-    let pos_in_indices = state
-        .indices
-        .iter()
-        .position(|&i| i == shard_idx)
-        .unwrap_or(state.indices.len().saturating_sub(1));
-    state.shard_pos = pos_in_indices as isize;
-
-    match get_shard_data(inverted, txn, collection, word, shard_idx)? {
-        Some(data) => {
-            let new_cur_pos = {
-                let archived = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(&data);
-                let shard = match archived {
-                    Ok(s) => s,
-                    Err(_) => {
-                        state.cur_shard_data = None;
-                        state.cur_pos = 0;
-                        return Ok(());
-                    }
-                };
-                let ids = &shard.ids;
-                let mut lo = 0;
-                let mut hi = ids.len();
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    match ids.get(mid) {
-                        Some(s) if s.as_str() < cursor => {
-                            lo = mid + 1;
-                        }
-                        _ => {
-                            hi = mid;
-                        }
-                    }
-                }
-                lo.min(ids.len().saturating_sub(1))
-            };
-            state.cur_shard_data = Some(data);
-            state.cur_pos = new_cur_pos;
-        }
-        None => {
+    if let Ok(shard) = rkyv::access::<ArchivedPostingShard, rkyv::rancor::Error>(encoded) {
+        let ids = &shard.ids;
+        let len = ids.len();
+        if len == 0 {
             state.cur_shard_data = None;
             state.cur_pos = 0;
             return Ok(());
         }
-    }
 
-    loop {
-        let cur = state.current();
-        match cur {
-            None => break,
-            Some(id) => {
-                let should_skip = if desc { id >= cursor } else { id <= cursor };
-                if should_skip {
-                    advance_iter(inverted, txn, collection, word, state, desc)?;
-                } else {
-                    break;
+        // Binary search to find cursor position
+        let mut lo = 0usize;
+        let mut hi = len;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            match ids.get(mid) {
+                Some(s) if s.as_str() < cursor => lo = mid + 1,
+                _ => hi = mid,
+            }
+        }
+
+        state.cur_shard_data = Some(encoded.to_vec());
+        state.cur_pos = lo.min(len.saturating_sub(1));
+
+        // Advance past the cursor
+        loop {
+            match state.current() {
+                None => break,
+                Some(id) => {
+                    let should_skip = if desc { id >= cursor } else { id <= cursor };
+                    if should_skip {
+                        advance_in_virtual_shard(state, desc);
+                    } else {
+                        break;
+                    }
                 }
             }
         }
     }
-
     Ok(())
 }
+
+

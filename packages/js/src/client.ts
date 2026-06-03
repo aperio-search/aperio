@@ -11,6 +11,8 @@ import {
 	type SearchParams,
 	type SearchResponse,
 	type StatusResponse,
+	type SuggestParams,
+	type SuggestResponse,
 	toCamel,
 } from "./types.js";
 
@@ -153,6 +155,19 @@ export class AperioClient {
 		const url = `/collections/${encodeURIComponent(collection)}/search?${query.toString()}`;
 		const data = await this.#request("GET", url);
 		return toCamel(data) as unknown as SearchResponse;
+	}
+
+	async suggest(
+		collection: string,
+		params: SuggestParams,
+	): Promise<SuggestResponse> {
+		const query = new URLSearchParams();
+		query.set("q", params.q);
+		if (params.take !== undefined) query.set("take", String(params.take));
+
+		const url = `/collections/${encodeURIComponent(collection)}/suggest?${query.toString()}`;
+		const data = await this.#request("GET", url);
+		return toCamel(data) as unknown as SuggestResponse;
 	}
 
 	async queueDepth(): Promise<QueueDepthResponse> {

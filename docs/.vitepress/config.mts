@@ -3,7 +3,7 @@ import { defineConfig } from "vitepress";
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: "Aperio",
-  description: "Screamingly fast, ultra-lean search engine.",
+  description: "Screamingly fast, ultra-lightweight search engine.",
   sitemap: { hostname: "https://aperiosearch.com" },
   head: [
     ["link", { rel: "icon", href: "/favicon.ico", sizes: "any" }],
@@ -71,7 +71,11 @@ export default defineConfig({
               { text: "Deleting Items", link: "/deleting-items" },
             ],
           },
-          { text: "Searching Documents", link: "/searching-documents" },
+          {
+            text: "Searching Documents",
+            link: "/searching-documents",
+          },
+          { text: "Suggesting Terms", link: "/suggesting-terms" },
           { text: "Deploying", link: "/deploying" },
           { text: "Import & Export", link: "/import-export" },
           { text: "Queue", link: "/queue" },

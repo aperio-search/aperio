@@ -1,6 +1,6 @@
 # @aperio-search/aperio
 
-Node.js client for [Aperio](https://aperiosearch.com) — a screamingly fast, ultra-lean search engine.
+Node.js client for [Aperio](https://aperiosearch.com) — a screamingly fast, ultra-lightweight search engine.
 
 ## Installation
 
@@ -61,6 +61,7 @@ await client.deleteCollection("movies");
 | Method | Description |
 |--------|-------------|
 | `search(collection, params)` | Full-text search with pagination |
+| `suggest(collection, params)` | Suggest indexed terms matching a prefix |
 
 ### Backup
 

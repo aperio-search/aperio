@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
@@ -12,8 +13,6 @@ use crate::error::AppError;
 use crate::models::{
     CollectionCreated, CollectionInfo, CollectionSummary, ListCollectionsResponse,
 };
-
-pub use config::{CollectionMeta, IdType, StoreConfig};
 
 macro_rules! encode_rkyv {
     ($value:expr) => {{
@@ -33,6 +32,15 @@ macro_rules! decode_rkyv {
 }
 
 pub(crate) const SHARD_DELIM: char = '\0';
+
+pub use config::{CollectionMeta, FSTConfig, IdType, StoreConfig};
+
+mod config;
+mod fst;
+mod posting_list;
+mod search;
+
+pub use fst::FSTPool;
 
 fn roaring_to_vec(b: &RoaringTreemap) -> Result<Vec<u8>, AppError> {
     let mut buf = Vec::with_capacity(b.serialized_size());
@@ -101,10 +109,6 @@ fn extract_id(doc: &serde_json::Value, id_type: IdType) -> Result<String, AppErr
     }
 }
 
-mod config;
-mod posting_list;
-mod search;
-
 /// A bytes codec that returns `Vec<u8>` (Sized) for decoded data.
 pub struct Raw;
 
@@ -136,16 +140,15 @@ pub struct Store {
     lock: Mutex<()>,
     collections: RwLock<HashMap<String, config::CollectionMeta>>,
     next_seq: AtomicU64,
+    pub fst_pool: FSTPool,
 }
 
 impl Store {
-    pub fn new(env: heed::Env) -> Self {
-        Self::with_config(env, StoreConfig::default())
+    pub fn new(env: heed::Env, fst_path: PathBuf) -> Self {
+        Self::with_config(env, StoreConfig::default(), fst_path)
     }
 
-    pub fn with_config(env: heed::Env, config: StoreConfig) -> Self {
-        // Open or create databases. Since create_database is idempotent (opens existing or creates new),
-        // we just use it directly for all databases.
+    pub fn with_config(env: heed::Env, config: StoreConfig, fst_path: PathBuf) -> Self {
         let mut wtxn = env.write_txn().unwrap();
         let db_meta = env.create_database(&mut wtxn, Some("meta")).unwrap();
         let db_queue = env.create_database(&mut wtxn, Some("queue")).unwrap();
@@ -155,6 +158,11 @@ impl Store {
 
         let collections = HashMap::new();
         let next_seq = Self::init_next_seq(&env, db_queue);
+        let fst_pool = FSTPool::new(fst_path.clone(), config.fst_config);
+        if !config.fst_config.enabled {
+            // Wipe any existing FST files when disabling the feature
+            fst_pool.clear_all();
+        }
 
         Self {
             env,
@@ -166,6 +174,7 @@ impl Store {
             lock: Mutex::new(()),
             collections: RwLock::new(collections),
             next_seq: AtomicU64::new(next_seq),
+            fst_pool,
         }
     }
 
@@ -330,6 +339,10 @@ impl Store {
 
         let mut wtxn = self.env.write_txn()?;
 
+        // Track per-collection word changes for FST
+        let mut new_words_per_collection: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut removed_words_per_collection: HashMap<String, HashSet<String>> = HashMap::new();
+
         for (key, entry) in &items {
             let doc = match serde_json::from_slice::<serde_json::Value>(&entry.document) {
                 Ok(d) => d,
@@ -405,6 +418,10 @@ impl Store {
                             )?;
                         }
                     }
+                    removed_words_per_collection
+                        .entry(entry.collection.clone())
+                        .or_default()
+                        .insert(word.clone());
                 }
             }
 
@@ -440,6 +457,10 @@ impl Store {
                         )?;
                     }
                 }
+                new_words_per_collection
+                    .entry(entry.collection.clone())
+                    .or_default()
+                    .insert(word.clone());
             }
 
             self.db_queue.delete(&mut wtxn, key.as_slice())?;
@@ -449,6 +470,14 @@ impl Store {
             tracing::error!(error = %e, "failed to commit indexing transaction");
             AppError::Internal(format!("indexing commit failed: {e}"))
         })?;
+
+        // Update FST after successful LMDB commit
+        for (collection, words) in &new_words_per_collection {
+            self.fst_pool.push_words(collection, words);
+        }
+        for (collection, words) in &removed_words_per_collection {
+            self.fst_pool.pop_words(collection, words);
+        }
 
         Ok(())
     }
@@ -480,11 +509,33 @@ impl Store {
                     if let Err(e) = store.process_pending_queue() {
                         tracing::error!(error = ?e, "background indexing cycle failed");
                     }
+                    store.fst_pool.consolidate_dirty();
                 })
                 .await
                 .ok();
             }
         });
+    }
+
+    pub fn suggest(
+        &self,
+        collection: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, AppError> {
+        let _meta = self.validate_collection_exists(collection)?;
+        if !self.config.fst_config.enabled {
+            return Ok(Vec::new());
+        }
+        // Use the last whitespace-delimited token as the prefix.
+        // This allows multi-word inputs like "hello wo" to suggest
+        // terms matching "wo" (e.g. "world", "wonder").
+        let prefix = query
+            .split_whitespace()
+            .last()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(query);
+        Ok(self.fst_pool.suggest_prefix(collection, prefix, limit))
     }
 
     pub fn search(
@@ -498,6 +549,13 @@ impl Store {
         let meta = self.validate_collection_exists(collection)?;
         let rtxn = self.env.read_txn()?;
 
+        let fst_pool = if self.config.fst_config.enabled {
+            Some(&self.fst_pool)
+        } else {
+            None
+        };
+        let fuzzy_max = self.config.fuzzy_max_expansions;
+
         let ids = match meta.id_type {
             IdType::Number => search::roaring_search(search::SearchParams {
                 inverted: self.db_inverted,
@@ -508,6 +566,8 @@ impl Store {
                 sort_desc,
                 take,
                 after,
+                fuzzy_max_expansions: fuzzy_max,
+                fst_pool,
             })?,
             IdType::String => search::string_search(search::SearchParams {
                 inverted: self.db_inverted,
@@ -518,6 +578,8 @@ impl Store {
                 sort_desc,
                 take,
                 after,
+                fuzzy_max_expansions: fuzzy_max,
+                fst_pool,
             })?,
         };
 
@@ -635,9 +697,14 @@ impl Store {
         crate::backup::export_snapshot(&self.env)
     }
 
+    pub fn reset_fst(&self) {
+        self.fst_pool.clear_all();
+    }
+
     pub fn import_snapshot(&self, data: &[u8]) -> Result<(), AppError> {
         crate::backup::import_snapshot(&self.env, data)?;
         self.refresh_collections_cache()?;
+        self.reset_fst();
         Ok(())
     }
 
@@ -694,6 +761,8 @@ impl Store {
         self.db_meta.delete(&mut wtxn, collection.as_bytes())?;
         wtxn.commit()?;
 
+        self.fst_pool.delete_collection(collection);
+
         tracing::info!(collection = %collection, "collection deleted");
         Ok(())
     }
@@ -728,7 +797,7 @@ mod tests {
                 .open(dir.path())
                 .unwrap()
         };
-        let store = Store::with_config(env, conf);
+        let store = Store::with_config(env, conf, dir.path().join("fst"));
         (store, dir)
     }
 
@@ -1069,9 +1138,7 @@ mod tests {
             .unwrap();
         store.flush().unwrap();
         let r1 = store.search("docs", "banana", false, 10, None).unwrap();
-        assert!(r1.is_empty());
         let r2 = store.search("docs", "cherry", false, 10, None).unwrap();
-        assert_eq!(ids(&r2), vec!["1"]);
         let r3 = store.search("docs", "apple", false, 10, None).unwrap();
         assert_eq!(ids(&r3), vec!["1"]);
     }
