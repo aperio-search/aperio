@@ -7,3 +7,11 @@ docs/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 docs/node_modules/
+assets/
+benchmarks/
+tests/
+packages/
+.github/
+.editorconfig
+LICENSE
+rust-toolchain.toml
