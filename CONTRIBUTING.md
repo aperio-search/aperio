@@ -29,7 +29,7 @@ cargo run                # dev server on :3000, data persists to ./data/aperio
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio`) |
+| `DATA_DIR` | `data` | Directory for persistent data |
 | `CONFIG_FILE` | — | Path to optional TOML config file |
 
 Config file parsing is **strict** — on any read or parse error the process panics with a clear message.
