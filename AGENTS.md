@@ -46,7 +46,7 @@ Two environment variables control the server:
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATA_DIR` | `data` | Directory for persistent data (`{DATA_DIR}/aperio`) |
+| `DATA_DIR` | `data` | Directory for persistent data |
 | `CONFIG_FILE` | (none) | Path to optional TOML config file |
 
 Config file parsing is **strict**: on any read or parse error the process panics with a clear message. No fallback to defaults.
