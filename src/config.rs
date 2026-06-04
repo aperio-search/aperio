@@ -9,6 +9,7 @@ use crate::store::{FSTConfig, StoreConfig};
 #[derive(Deserialize, Default)]
 pub struct AppConfig {
     pub min_token_length: Option<usize>,
+    pub max_token_length: Option<usize>,
     pub max_string_shard_size: Option<usize>,
     pub max_roaring_shard_size: Option<u64>,
     pub log_level: Option<String>,
@@ -54,6 +55,7 @@ impl AppConfig {
         }
         StoreConfig {
             min_token_length: self.min_token_length.unwrap_or(3),
+            max_token_length: self.max_token_length.unwrap_or(400),
             max_string_shard_size: self.max_string_shard_size.unwrap_or(1000),
             max_roaring_shard_size: self.max_roaring_shard_size.unwrap_or(100_000),
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
@@ -73,6 +75,7 @@ mod tests {
     fn load_none_path() {
         let cfg = AppConfig::load(None);
         assert!(cfg.min_token_length.is_none());
+        assert!(cfg.max_token_length.is_none());
         assert!(cfg.max_string_shard_size.is_none());
         assert!(cfg.max_roaring_shard_size.is_none());
     }
@@ -157,6 +160,7 @@ search_api_key = "custom-search-key"
     fn merge_defaults() {
         let store_cfg = AppConfig::default().merge_into_store_config();
         assert_eq!(store_cfg.min_token_length, 3);
+        assert_eq!(store_cfg.max_token_length, 400);
         assert_eq!(store_cfg.max_string_shard_size, 1000);
         assert_eq!(store_cfg.max_roaring_shard_size, 100_000);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(900));
@@ -167,6 +171,7 @@ search_api_key = "custom-search-key"
     fn merge_overrides() {
         let app_cfg = AppConfig {
             min_token_length: Some(5),
+            max_token_length: None,
             max_string_shard_size: Some(200),
             max_roaring_shard_size: Some(50_000),
             index_interval_ms: Some(300),
@@ -183,9 +188,33 @@ search_api_key = "custom-search-key"
         };
         let store_cfg = app_cfg.merge_into_store_config();
         assert_eq!(store_cfg.min_token_length, 5);
+        assert_eq!(store_cfg.max_token_length, 400);
         assert_eq!(store_cfg.max_string_shard_size, 200);
         assert_eq!(store_cfg.max_roaring_shard_size, 50_000);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
         assert_eq!(store_cfg.max_queue_batch_size, 500);
+    }
+
+    #[test]
+    fn merge_max_token_length_override() {
+        let app_cfg = AppConfig {
+            min_token_length: None,
+            max_token_length: Some(10),
+            max_string_shard_size: None,
+            max_roaring_shard_size: None,
+            index_interval_ms: None,
+            max_queue_batch_size: None,
+            log_level: None,
+            main_api_key: None,
+            search_api_key: None,
+            dumps_folder: None,
+            fst_enabled: None,
+            fst_max_words: None,
+            fst_max_size_kb: None,
+            fst_consolidate_interval_secs: None,
+            fuzzy_max_expansions: None,
+        };
+        let store_cfg = app_cfg.merge_into_store_config();
+        assert_eq!(store_cfg.max_token_length, 10);
     }
 }

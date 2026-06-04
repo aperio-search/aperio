@@ -1,7 +1,5 @@
 # Benchmarks
 
-The benchmarks are easy and fast to be reproducible (less than 1 hour, most of the time spent on indexing).
-
 ## Results
 
 On the benchmarks, RAM was limited to 256 MB.

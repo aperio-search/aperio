@@ -17,7 +17,7 @@ pub fn shard_key(collection: &str, word: &str, shard: usize) -> Vec<u8> {
     )
     .into_bytes();
     if key.len() > 450 {
-        tracing::warn!(
+        tracing::trace!(
             key_len = key.len(),
             collection_len = collection.len(),
             word_len = word.len(),

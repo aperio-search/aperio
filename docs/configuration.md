@@ -19,6 +19,7 @@ Example `config.toml`:
 
 ```toml
 min_token_length = 3
+max_token_length = 400
 max_string_shard_size = 1000
 max_roaring_shard_size = 100000
 index_interval_ms = 900
@@ -40,6 +41,7 @@ fst_consolidate_interval_secs = 300
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `min_token_length` | `integer` | `3` | Minimum length of indexed tokens — shorter tokens are discarded during indexing |
+| `max_token_length` | `integer` | `400` | Maximum length of indexed tokens — longer tokens are discarded during indexing to keep LMDB keys within safe size limits |
 | `max_string_shard_size` | `integer` | `1000` | Max document IDs per string posting-list shard (only applies to `"id_type": "string"`) |
 | `max_roaring_shard_size` | `integer` | `100000` | Max document IDs per roaring bitmap shard (only applies to `"id_type": "number"`) |
 | `index_interval_ms` | `integer` | `900` | Interval in milliseconds between background index queue flushes. Lower values reduce write-to-search latency; higher values batch more work per flush |

@@ -15,6 +15,7 @@ pub struct SearchParams<'a> {
     pub txn: &'a heed::RoTxn<'a>,
     pub collection: &'a str,
     pub config_min_token_length: usize,
+    pub config_max_token_length: usize,
     pub query: &'a str,
     pub sort_desc: bool,
     pub take: usize,
@@ -58,6 +59,7 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         txn,
         collection,
         config_min_token_length,
+        config_max_token_length,
         query,
         sort_desc,
         take,
@@ -65,7 +67,7 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         fuzzy_max_expansions,
         fst_pool,
     } = params;
-    let tokens: Vec<String> = tokenize(query, config_min_token_length)
+    let tokens: Vec<String> = tokenize(query, config_min_token_length, config_max_token_length)
         .into_iter()
         .collect();
     if tokens.is_empty() {
@@ -154,6 +156,7 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         txn,
         collection,
         config_min_token_length,
+        config_max_token_length,
         query,
         sort_desc,
         take,
@@ -161,7 +164,7 @@ pub fn string_search(params: SearchParams) -> Result<Vec<String>, AppError> {
         fuzzy_max_expansions,
         fst_pool,
     } = params;
-    let tokens: Vec<String> = tokenize(query, config_min_token_length)
+    let tokens: Vec<String> = tokenize(query, config_min_token_length, config_max_token_length)
         .into_iter()
         .collect();
     if tokens.is_empty() {
