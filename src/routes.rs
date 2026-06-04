@@ -11,9 +11,9 @@ use tower_http::trace::TraceLayer;
 use crate::auth::AuthConfig;
 use crate::error::AppError;
 use crate::models::{
-    BackupFile, CollectionCreated, CollectionInfo, CreateCollectionRequest, ExportResponse,
-    ImportResponse, ListCollectionsResponse, QueueDepthResponse, SearchParams, SearchResponse,
-    StatusResponse, SuggestParams, SuggestResponse,
+    BackupFile, BulkIngestResponse, CollectionCreated, CollectionInfo, CreateCollectionRequest,
+    ExportResponse, ImportResponse, ListCollectionsResponse, QueueDepthResponse, SearchParams,
+    SearchResponse, StatusResponse, SuggestParams, SuggestResponse,
 };
 use crate::store::Store;
 
@@ -30,6 +30,7 @@ fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
             get(list_collections).post(create_collection),
         )
         .route("/collections/{collection}/items", post(upsert_item))
+        .route("/collections/{collection}/items/bulk", post(bulk_ingest))
         .route("/collections/{collection}/search", get(search))
         .route("/collections/{collection}/suggest", get(suggest))
         .route("/collections/{collection}/items/{id}", delete(delete_item))
@@ -95,6 +96,18 @@ async fn upsert_item(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     Ok(StatusCode::OK)
+}
+
+async fn bulk_ingest(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(docs): Json<Vec<serde_json::Value>>,
+) -> Result<Json<BulkIngestResponse>, AppError> {
+    let store = Arc::clone(&state.store);
+    let count = tokio::task::spawn_blocking(move || store.bulk_ingest(&collection, docs))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(BulkIngestResponse { ok: true, count }))
 }
 
 async fn search(

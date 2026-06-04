@@ -305,6 +305,36 @@ impl Store {
         Ok(())
     }
 
+    pub fn bulk_ingest(
+        &self,
+        collection: &str,
+        docs: Vec<serde_json::Value>,
+    ) -> Result<usize, AppError> {
+        let meta = self.validate_collection_exists(collection)?;
+        let mut wtxn = self.env.write_txn()?;
+        let n = docs.len();
+        for doc in docs {
+            let id = extract_id(&doc, meta.id_type)?;
+            let seq = self.allocate_seq();
+            let doc_bytes =
+                serde_json::to_vec(&doc).map_err(|e| AppError::Internal(e.to_string()))?;
+            let entry = config::QueuedIndex {
+                collection: collection.to_string(),
+                id: id.to_string(),
+                document: doc_bytes,
+            };
+            let seq_key = seq.to_be_bytes();
+            self.db_queue.put(
+                &mut wtxn,
+                seq_key.as_slice(),
+                encode_rkyv!(&entry)?.as_slice(),
+            )?;
+        }
+        wtxn.commit()?;
+        tracing::info!(collection = %collection, count = n, "bulk ingested items");
+        Ok(n)
+    }
+
     pub fn process_pending_queue(&self) -> Result<(), AppError> {
         let items: Vec<(Vec<u8>, config::QueuedIndex)> = {
             let rtxn = match self.env.read_txn() {

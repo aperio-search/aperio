@@ -73,6 +73,11 @@ export interface StatusResponse {
 	ok: boolean;
 }
 
+export interface BulkIngestResponse {
+	ok: boolean;
+	count: number;
+}
+
 export class AperioError extends Error {
 	status: number;
 

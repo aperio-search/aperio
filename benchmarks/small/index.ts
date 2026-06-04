@@ -1,30 +1,19 @@
 import fs from "node:fs";
-import http from "node:http";
 import readline from "node:readline";
 
 const COLLECTION_NAME: string = "books";
 const DATA_FILE_PATH: string = "./books.csv";
-const CONCURRENCY_LIMIT: number = 500;
+const BATCH_SIZE: number = 500;
 const API_SECRET: string = "SecretApiKey";
 
-const agent = new http.Agent({
-  keepAlive: true,
-  maxSockets: CONCURRENCY_LIMIT,
-});
-
-const headers: Record<string, string> = {
+const BASE_URL = "http://localhost:3000";
+const HEADERS: Record<string, string> = {
   "Content-Type": "application/json",
   Authorization: API_SECRET,
 };
 
 interface HttpError extends Error {
   status?: number;
-}
-
-interface CollectionPayload {
-  name: string;
-  id_type: "number" | "string";
-  searchable_fields: string[];
 }
 
 interface BookPayload {
@@ -42,39 +31,17 @@ interface BookPayload {
   publisher: string;
 }
 
-async function apiPost(
-  path: string,
-  body: CollectionPayload | BookPayload,
-): Promise<void> {
-  return await new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body);
-    const options: http.RequestOptions = {
-      hostname: "localhost",
-      port: 3000,
-      path,
-      method: "POST",
-      headers: {
-        ...headers,
-        "Content-Length": Buffer.byteLength(payload).toString(),
-      },
-      agent,
-    };
-
-    const req = http.request(options, (res) => {
-      res.resume();
-      if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-        resolve();
-      } else {
-        const err: HttpError = new Error(`HTTP ${res.statusCode}`);
-        err.status = res.statusCode;
-        reject(err);
-      }
-    });
-
-    req.on("error", reject);
-    req.write(payload);
-    req.end();
+async function apiPost(path: string, body: object): Promise<void> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    const err: HttpError = new Error(`HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
 }
 
 async function createCollection(): Promise<void> {
@@ -120,6 +87,21 @@ function parseCSVLine(line: string): string[] {
   return result;
 }
 
+async function sendBatch(batch: BookPayload[]): Promise<number> {
+  const res = await fetch(`${BASE_URL}/collections/${COLLECTION_NAME}/items/bulk`, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify(batch),
+  });
+  if (!res.ok) {
+    const err: HttpError = new Error(`HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const body = await res.json() as { ok: boolean; count: number };
+  return body.count;
+}
+
 async function indexBooks(): Promise<void> {
   const fileStream = fs.createReadStream(DATA_FILE_PATH);
   const rl = readline.createInterface({
@@ -131,11 +113,9 @@ async function indexBooks(): Promise<void> {
   let successCount: number = 0;
   let failureCount: number = 0;
   let isHeader: boolean = true;
-  let currentBatch: Promise<void>[] = [];
+  let batch: BookPayload[] = [];
 
-  console.log(
-    `Starting rapid authorized batching (Chunks of ${CONCURRENCY_LIMIT})...`,
-  );
+  console.log(`Starting bulk ingestion (Batches of ${BATCH_SIZE})...`);
   const startTime: number = Date.now();
 
   for await (const line of rl) {
@@ -181,32 +161,21 @@ async function indexBooks(): Promise<void> {
       publisher: publisher || "",
     };
 
-    const requestPromise: Promise<void> = apiPost(
-      `/collections/${COLLECTION_NAME}/items`,
-      payload,
-    )
-      .then(() => {
-        successCount++;
-      })
-      .catch((err: HttpError) => {
-        failureCount++;
-        if (failureCount === 1 && err.status === 401) {
+    batch.push(payload);
+
+    if (batch.length === BATCH_SIZE) {
+      try {
+        const count = await sendBatch(batch);
+        successCount += count;
+      } catch (err: any) {
+        failureCount += batch.length;
+        if (failureCount === BATCH_SIZE && err.status === 401) {
           console.error(
-            "The server rejected an item write with a 401 Unauthorized status.",
+            "The server rejected a bulk write with a 401 Unauthorized status.",
           );
         }
-        if (failureCount % 20000 === 0) {
-          console.error(
-            `Ingestion error batch sample: ${err.message} (Status: ${err.status || "network_error"})`,
-          );
-        }
-      });
-
-    currentBatch.push(requestPromise);
-
-    if (currentBatch.length === CONCURRENCY_LIMIT) {
-      await Promise.all(currentBatch);
-      currentBatch = [];
+      }
+      batch = [];
 
       if (successCount % 1000 === 0) {
         const elapsedMin: string = (
@@ -221,8 +190,13 @@ async function indexBooks(): Promise<void> {
     }
   }
 
-  if (currentBatch.length > 0) {
-    await Promise.all(currentBatch);
+  if (batch.length > 0) {
+    try {
+      const count = await sendBatch(batch);
+      successCount += count;
+    } catch {
+      failureCount += batch.length;
+    }
   }
 
   const totalTimeMin: string = ((Date.now() - startTime) / 1000 / 60).toFixed(

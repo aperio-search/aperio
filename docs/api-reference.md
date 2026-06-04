@@ -24,6 +24,7 @@ Complete list of all Aperio HTTP endpoints.
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/collections/{collection}/items` | Insert or update an item |
+| `POST` | `/collections/{collection}/items/bulk` | [Bulk insert or update multiple items](/bulk-ingestion) |
 | `DELETE` | `/collections/{collection}/items/{id}` | Delete an item by ID |
 
 ## Search

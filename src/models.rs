@@ -193,3 +193,9 @@ pub struct CollectionSummary {
 pub struct ListCollectionsResponse {
     pub collections: Vec<CollectionSummary>,
 }
+
+#[derive(Serialize)]
+pub struct BulkIngestResponse {
+    pub ok: bool,
+    pub count: usize,
+}

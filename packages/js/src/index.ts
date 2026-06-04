@@ -1,5 +1,6 @@
 export { AperioClient } from "./client.js";
 export type {
+	BulkIngestResponse,
 	ClientOptions,
 	CollectionCreated,
 	CollectionInfo,

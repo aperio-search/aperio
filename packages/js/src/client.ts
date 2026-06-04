@@ -1,5 +1,6 @@
 import {
 	AperioError,
+	type BulkIngestResponse,
 	type ClientOptions,
 	type CollectionCreated,
 	type CollectionInfo,
@@ -133,6 +134,29 @@ export class AperioClient {
 			`/collections/${encodeURIComponent(collection)}/items`,
 			doc as Record<string, JsonValue>,
 		);
+	}
+
+	async bulkIngest(
+		collection: string,
+		documents: Record<string, unknown>[],
+	): Promise<BulkIngestResponse> {
+		const url = new URL(`/collections/${encodeURIComponent(collection)}/items/bulk`, this.#baseUrl);
+		const headers: Record<string, string> = { Authorization: this.#apiKey, "Content-Type": "application/json" };
+		const response = await fetch(url.toString(), {
+			method: "POST",
+			headers,
+			body: JSON.stringify(documents),
+		});
+		if (!response.ok) {
+			let message = `HTTP ${response.status}`;
+			try {
+				const errBody = (await response.json()) as Record<string, unknown>;
+				if (typeof errBody.error === "string") message = errBody.error;
+			} catch { /* ignore */ }
+			throw new AperioError(response.status, message);
+		}
+		const data = (await response.json()) as Record<string, JsonValue>;
+		return toCamel(data) as unknown as BulkIngestResponse;
 	}
 
 	async deleteItem(collection: string, id: string): Promise<void> {

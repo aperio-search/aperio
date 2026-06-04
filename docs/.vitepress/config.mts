@@ -68,6 +68,7 @@ export default defineConfig({
             text: "Items Management",
             items: [
               { text: "Inserting Items", link: "/inserting-items" },
+              { text: "Bulk Ingestion", link: "/bulk-ingestion" },
               { text: "Deleting Items", link: "/deleting-items" },
             ],
           },
