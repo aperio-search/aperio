@@ -1,37 +1,66 @@
 import fs from "node:fs";
+import http from "node:http";
 import readline from "node:readline";
 
-// --- CONFIGURATION ---
-const BASE_URL = "http://localhost:3000";
 const COLLECTION_NAME = "imdb_titles";
 const DATA_FILE_PATH = "./title.basics.tsv";
 const CONCURRENCY_LIMIT = 500;
 const API_SECRET = "SecretApiKey";
+
+const agent = new http.Agent({
+  keepAlive: true,
+  maxSockets: CONCURRENCY_LIMIT,
+});
 
 const headers = {
   "Content-Type": "application/json",
   Authorization: API_SECRET,
 };
 
+async function apiPost(
+  path: string,
+  body: object,
+): Promise<{ status: number }> {
+  return await new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const options: http.RequestOptions = {
+      hostname: "localhost",
+      port: 3000,
+      path,
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Length": Buffer.byteLength(payload).toString(),
+      },
+      agent,
+    };
+
+    const req = http.request(options, (res) => {
+      res.resume();
+      resolve({ status: res.statusCode ?? 0 });
+    });
+
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 async function createCollection() {
   try {
     console.log(`Setting up collection: "${COLLECTION_NAME}"...`);
-    const response = await fetch(`${BASE_URL}/collections`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        name: COLLECTION_NAME,
-        id_type: "number",
-        searchable_fields: ["title", "type", "genres"],
-      }),
+    const res = await apiPost("/collections", {
+      name: COLLECTION_NAME,
+      id_type: "number",
+      searchable_fields: ["title", "type", "genres"],
     });
-    if (response.status === 409) {
+    if (res.status === 409) {
       console.log("Collection already exists. Moving to indexing...");
-    } else if (response.status === 401) {
-      console.error('🚨 Authentication failed! Check your "SecretApiKey".');
+    } else if (res.status === 401) {
+      console.error('Authentication failed! Check your "SecretApiKey".');
       process.exit(1);
-    } else if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    } else if (res.status < 200 || res.status >= 300) {
+      throw new Error(`HTTP ${res.status}`);
     } else {
       console.log("Collection verified/ready.");
     }
@@ -93,38 +122,32 @@ async function indexImdbTitles() {
       release_year: cleanYear,
     };
 
-    const requestPromise = fetch(
-      `${BASE_URL}/collections/${COLLECTION_NAME}/items`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      },
+    const requestPromise = apiPost(
+      `/collections/${COLLECTION_NAME}/items`,
+      payload,
     )
       .then((res) => {
-        if (res.ok) {
+        if (res.status >= 200 && res.status < 300) {
           successCount++;
         } else {
           failureCount++;
           if (failureCount === 1 && res.status === 401) {
             console.error(
-              "🚨 The server rejected an item write with a 401 Unauthorized status.",
+              "The server rejected an item write with a 401 Unauthorized status.",
             );
           }
           if (failureCount % 20000 === 0) {
-            console.error(
-              `🚨 Ingestion error batch sample: HTTP ${res.status}`,
-            );
+            console.error(`Ingestion error batch sample: HTTP ${res.status}`);
           }
         }
       })
-      .catch((err) => {
+      .catch(() => {
         failureCount++;
         if (failureCount === 1) {
-          console.error("🚨 Network error on item write.");
+          console.error("Network error on item write.");
         }
         if (failureCount % 20000 === 0) {
-          console.error(`🚨 Ingestion error batch sample: ${err.message}`);
+          console.error(`Ingestion error batch sample: network error`);
         }
       });
 
@@ -135,7 +158,7 @@ async function indexImdbTitles() {
       await Promise.all(currentBatch);
       currentBatch = [];
 
-      if (successCount % 50000 === 0) {
+      if (successCount % 1000 === 0) {
         const elapsedMin = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
         console.log(
           `⚡ Speedometer: ${successCount} indexed. (Read: ${totalLinesRead} lines, Elapsed: ${elapsedMin} min)`,
