@@ -53,12 +53,12 @@ fn roaring_from_slice(bytes: &[u8]) -> Result<RoaringTreemap, AppError> {
     RoaringTreemap::deserialize_from(bytes).map_err(|e| AppError::Internal(e.to_string()))
 }
 
-fn tokenize(content: &str, min_token_length: usize) -> HashSet<String> {
+fn tokenize(content: &str, min_token_length: usize, max_token_length: usize) -> HashSet<String> {
     content
         .tokenize()
         .filter(|t| t.is_word())
         .map(|t| t.lemma().to_string())
-        .filter(|w| w.len() >= min_token_length)
+        .filter(|w| w.len() >= min_token_length && w.len() <= max_token_length)
         .collect()
 }
 
@@ -402,7 +402,11 @@ impl Store {
             };
 
             let content = extract_searchable_content(&doc, &meta.searchable_fields);
-            let new_words = tokenize(&content, self.config.min_token_length);
+            let new_words = tokenize(
+                &content,
+                self.config.min_token_length,
+                self.config.max_token_length,
+            );
 
             let doc_key = doc_key(&entry.collection, &entry.id);
             if doc_key.len() > 500 {
@@ -420,7 +424,11 @@ impl Store {
                     if let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data) {
                         let old_content =
                             extract_searchable_content(&old_doc, &meta.searchable_fields);
-                        tokenize(&old_content, self.config.min_token_length)
+                        tokenize(
+                            &old_content,
+                            self.config.min_token_length,
+                            self.config.max_token_length,
+                        )
                     } else {
                         HashSet::new()
                     }
@@ -432,15 +440,6 @@ impl Store {
 
             if !is_new {
                 for word in old_words.difference(&new_words) {
-                    if word.len() > 400 {
-                        tracing::warn!(
-                            collection = %entry.collection,
-                            doc_id = %entry.id,
-                            word_len = word.len(),
-                            word = %word.chars().take(200).collect::<String>(),
-                            "processing token removal with very long word"
-                        );
-                    }
                     match meta.id_type {
                         IdType::Number => {
                             let id_u64 = entry.id.parse::<u64>().map_err(|_| {
@@ -478,15 +477,6 @@ impl Store {
                 .put(&mut wtxn, doc_key.as_slice(), entry.document.as_slice())?;
 
             for word in &new_words {
-                if word.len() > 400 {
-                    tracing::warn!(
-                        collection = %entry.collection,
-                        doc_id = %entry.id,
-                        word_len = word.len(),
-                        word = %word.chars().take(200).collect::<String>(),
-                        "processing token addition with very long word"
-                    );
-                }
                 match meta.id_type {
                     IdType::Number => {
                         let id_u64 = entry.id.parse::<u64>().map_err(|_| {
@@ -620,6 +610,7 @@ impl Store {
                 txn: &rtxn,
                 collection,
                 config_min_token_length: self.config.min_token_length,
+                config_max_token_length: self.config.max_token_length,
                 query,
                 sort_desc,
                 take,
@@ -632,6 +623,7 @@ impl Store {
                 txn: &rtxn,
                 collection,
                 config_min_token_length: self.config.min_token_length,
+                config_max_token_length: self.config.max_token_length,
                 query,
                 sort_desc,
                 take,
@@ -674,7 +666,11 @@ impl Store {
             let doc: serde_json::Value =
                 serde_json::from_slice(&doc_data).map_err(|e| AppError::Internal(e.to_string()))?;
             let content = extract_searchable_content(&doc, &meta.searchable_fields);
-            let tokens = tokenize(&content, self.config.min_token_length);
+            let tokens = tokenize(
+                &content,
+                self.config.min_token_length,
+                self.config.max_token_length,
+            );
             (doc, tokens)
         };
 
@@ -886,7 +882,11 @@ mod tests {
     #[test]
     fn tokenize_basic() {
         let config = StoreConfig::default();
-        let tokens = tokenize("hello world", config.min_token_length);
+        let tokens = tokenize(
+            "hello world",
+            config.min_token_length,
+            config.max_token_length,
+        );
         let mut sorted: Vec<_> = tokens.into_iter().collect();
         sorted.sort();
         assert_eq!(sorted, vec!["hello", "world"]);
@@ -895,7 +895,11 @@ mod tests {
     #[test]
     fn tokenize_deduplicates() {
         let config = StoreConfig::default();
-        let tokens = tokenize("foo foo foo", config.min_token_length);
+        let tokens = tokenize(
+            "foo foo foo",
+            config.min_token_length,
+            config.max_token_length,
+        );
         assert_eq!(tokens.len(), 1);
         assert!(tokens.contains("foo"));
     }
@@ -906,7 +910,11 @@ mod tests {
             min_token_length: 3,
             ..Default::default()
         };
-        let tokens = tokenize("a an the fox", config.min_token_length);
+        let tokens = tokenize(
+            "a an the fox",
+            config.min_token_length,
+            config.max_token_length,
+        );
         assert_eq!(tokens.len(), 2);
         assert!(tokens.contains("the"));
         assert!(tokens.contains("fox"));
@@ -915,7 +923,7 @@ mod tests {
     #[test]
     fn tokenize_empty() {
         let config = StoreConfig::default();
-        let tokens = tokenize("", config.min_token_length);
+        let tokens = tokenize("", config.min_token_length, config.max_token_length);
         assert!(tokens.is_empty());
     }
 
@@ -925,7 +933,11 @@ mod tests {
             min_token_length: 10,
             ..Default::default()
         };
-        let tokens = tokenize("hello world", config.min_token_length);
+        let tokens = tokenize(
+            "hello world",
+            config.min_token_length,
+            config.max_token_length,
+        );
         assert!(tokens.is_empty());
     }
 
@@ -964,8 +976,24 @@ mod tests {
     fn store_config_defaults() {
         let cfg = StoreConfig::default();
         assert_eq!(cfg.min_token_length, 3);
+        assert_eq!(cfg.max_token_length, 400);
         assert_eq!(cfg.max_string_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
+    }
+
+    #[test]
+    fn tokenize_long_words_filtered() {
+        let config = StoreConfig {
+            max_token_length: 4,
+            ..Default::default()
+        };
+        let tokens = tokenize(
+            "hello world",
+            config.min_token_length,
+            config.max_token_length,
+        );
+        assert!(!tokens.contains("hello")); // 5 chars, excluded by max_token_length
+        assert!(tokens.is_empty());
     }
 
     #[test]

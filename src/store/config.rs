@@ -61,6 +61,7 @@ impl Default for FSTConfig {
 #[derive(Clone)]
 pub struct StoreConfig {
     pub min_token_length: usize,
+    pub max_token_length: usize,
     pub max_string_shard_size: usize,
     pub max_roaring_shard_size: u64,
     pub index_interval: Duration,
@@ -74,6 +75,7 @@ impl Default for StoreConfig {
     fn default() -> Self {
         Self {
             min_token_length: 3,
+            max_token_length: 400,
             max_string_shard_size: 1000,
             max_roaring_shard_size: 100_000,
             index_interval: Duration::from_millis(900),
