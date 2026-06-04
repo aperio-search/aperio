@@ -140,8 +140,14 @@ export class AperioClient {
 		collection: string,
 		documents: Record<string, unknown>[],
 	): Promise<BulkIngestResponse> {
-		const url = new URL(`/collections/${encodeURIComponent(collection)}/items/bulk`, this.#baseUrl);
-		const headers: Record<string, string> = { Authorization: this.#apiKey, "Content-Type": "application/json" };
+		const url = new URL(
+			`/collections/${encodeURIComponent(collection)}/items/bulk`,
+			this.#baseUrl,
+		);
+		const headers: Record<string, string> = {
+			Authorization: this.#apiKey,
+			"Content-Type": "application/json",
+		};
 		const response = await fetch(url.toString(), {
 			method: "POST",
 			headers,
@@ -152,7 +158,9 @@ export class AperioClient {
 			try {
 				const errBody = (await response.json()) as Record<string, unknown>;
 				if (typeof errBody.error === "string") message = errBody.error;
-			} catch { /* ignore */ }
+			} catch {
+				/* ignore */
+			}
 			throw new AperioError(response.status, message);
 		}
 		const data = (await response.json()) as Record<string, JsonValue>;
