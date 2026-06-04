@@ -405,6 +405,16 @@ impl Store {
             let new_words = tokenize(&content, self.config.min_token_length);
 
             let doc_key = doc_key(&entry.collection, &entry.id);
+            if doc_key.len() > 500 {
+                tracing::warn!(
+                    collection = %entry.collection,
+                    doc_id = %entry.id,
+                    doc_key_len = doc_key.len(),
+                    "skipping document with oversized doc_key"
+                );
+                self.db_queue.delete(&mut wtxn, key.as_slice())?;
+                continue;
+            }
             let old_words = match self.db_docs.get(&wtxn, doc_key.as_slice())? {
                 Some(old_data) => {
                     if let Ok(old_doc) = serde_json::from_slice::<serde_json::Value>(&old_data) {
@@ -422,6 +432,15 @@ impl Store {
 
             if !is_new {
                 for word in old_words.difference(&new_words) {
+                    if word.len() > 400 {
+                        tracing::warn!(
+                            collection = %entry.collection,
+                            doc_id = %entry.id,
+                            word_len = word.len(),
+                            word = %word.chars().take(200).collect::<String>(),
+                            "processing token removal with very long word"
+                        );
+                    }
                     match meta.id_type {
                         IdType::Number => {
                             let id_u64 = entry.id.parse::<u64>().map_err(|_| {
@@ -459,6 +478,15 @@ impl Store {
                 .put(&mut wtxn, doc_key.as_slice(), entry.document.as_slice())?;
 
             for word in &new_words {
+                if word.len() > 400 {
+                    tracing::warn!(
+                        collection = %entry.collection,
+                        doc_id = %entry.id,
+                        word_len = word.len(),
+                        word = %word.chars().take(200).collect::<String>(),
+                        "processing token addition with very long word"
+                    );
+                }
                 match meta.id_type {
                     IdType::Number => {
                         let id_u64 = entry.id.parse::<u64>().map_err(|_| {
@@ -803,6 +831,15 @@ fn doc_key(collection: &str, doc_id: &str) -> Vec<u8> {
     key.extend_from_slice(collection.as_bytes());
     key.push(0);
     key.extend_from_slice(doc_id.as_bytes());
+    if key.len() > 450 {
+        tracing::warn!(
+            key_len = key.len(),
+            collection_len = collection.len(),
+            doc_id_len = doc_id.len(),
+            doc_id = %doc_id.chars().take(200).collect::<String>(),
+            "doc_key exceeds safe LMDB key size"
+        );
+    }
     key
 }
 

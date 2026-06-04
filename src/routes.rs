@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{delete, get, post};
@@ -39,6 +39,7 @@ fn router_with_state(state: Arc<AppState>, auth: AuthConfig) -> Router {
         .route("/queue", get(queue_depth_handler))
         .route("/backup/export", post(export_handler))
         .route("/backup/import", post(import_handler))
+        .layer(DefaultBodyLimit::max(20 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn_with_state(
             auth,

@@ -44,6 +44,10 @@ async function apiPost(p: string, body: object): Promise<number> {
     headers: HEADERS,
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`POST ${p} failed (${res.status}): ${text.slice(0, 500)}`);
+  }
   return res.status;
 }
 
@@ -198,6 +202,10 @@ async function sendBatch(
     },
   );
   if (!res.ok) {
+    const text = await res.text();
+    console.error(
+      `[Worker ${cluster.worker?.id}] Bulk POST failed (${res.status}): ${text.slice(0, 500)}`,
+    );
     throw new Error(`HTTP ${res.status}`);
   }
   const body = (await res.json()) as { ok: boolean; count: number };

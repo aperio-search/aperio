@@ -8,12 +8,25 @@ use super::config::PostingShard;
 use super::roaring_from_slice;
 use super::roaring_to_vec;
 
+const MAX_KEY_BYTES: usize = 500;
+
 pub fn shard_key(collection: &str, word: &str, shard: usize) -> Vec<u8> {
-    format!(
+    let key = format!(
         "{}{}{}{}{:04}",
         collection, SHARD_DELIM, word, SHARD_DELIM, shard
     )
-    .into_bytes()
+    .into_bytes();
+    if key.len() > 450 {
+        tracing::warn!(
+            key_len = key.len(),
+            collection_len = collection.len(),
+            word_len = word.len(),
+            word = %word.chars().take(200).collect::<String>(),
+            shard = shard,
+            "shard_key exceeds safe LMDB key size"
+        );
+    }
+    key
 }
 
 fn shard_prefix(collection: &str, word: &str) -> Vec<u8> {
@@ -111,6 +124,15 @@ pub fn add_to_posting_list(
     id: &str,
     max_string_shard_size: usize,
 ) -> Result<(), AppError> {
+    if shard_key(collection, word, 0).len() > MAX_KEY_BYTES {
+        tracing::warn!(
+            collection = %collection,
+            word_len = word.len(),
+            word = %word.chars().take(200).collect::<String>(),
+            "skipping oversized word in string posting list"
+        );
+        return Ok(());
+    }
     let indices = list_shard_indices(inverted, wtxn, collection, word)?;
 
     if indices.is_empty() {
@@ -229,6 +251,15 @@ pub fn add_to_roaring_posting_list(
     id: u64,
     max_roaring_shard_size: u64,
 ) -> Result<(), AppError> {
+    if shard_key(collection, word, 0).len() > MAX_KEY_BYTES {
+        tracing::warn!(
+            collection = %collection,
+            word_len = word.len(),
+            word = %word.chars().take(200).collect::<String>(),
+            "skipping oversized word in roaring posting list"
+        );
+        return Ok(());
+    }
     let indices = list_shard_indices(inverted, wtxn, collection, word)?;
 
     if indices.is_empty() {
