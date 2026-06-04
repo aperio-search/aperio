@@ -553,6 +553,134 @@ async fn upsert_with_numeric_id() {
 }
 
 // ---------------------------------------------------------------------------
+// Bulk ingest endpoint tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bulk_ingest_string() {
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items/bulk",
+        json!([
+            {"id": "a", "content": "hello world"},
+            {"id": "b", "content": "foo bar"},
+            {"id": "c", "content": "hello bar"},
+        ]),
+    );
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["count"], 3);
+
+    store.flush().unwrap();
+    let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn bulk_ingest_number() {
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "number", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items/bulk",
+        json!([
+            {"id": 1, "content": "hello"},
+            {"id": 2, "content": "world"},
+        ]),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+
+    store.flush().unwrap();
+    let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
+    assert_eq!(body["results"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn bulk_ingest_nonexistent_collection() {
+    let (app, _dir, _store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections/nope/items/bulk",
+        json!([{"id": "1", "content": "hello"}]),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bulk_ingest_missing_id() {
+    let (app, _dir, _store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items/bulk",
+        json!([{"content": "hello"}]),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn bulk_ingest_empty() {
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    let req = json_request(Method::POST, "/collections/docs/items/bulk", json!([]));
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"], 0);
+
+    store.flush().unwrap();
+    let (_status, body) = send(&app, get_request("/collections/docs/search?q=hello")).await;
+    assert_eq!(body["results"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn bulk_ingest_requires_main_key() {
+    let (app, _dir, _store) = test_app();
+
+    let req = search_key_json(
+        Method::POST,
+        "/collections/docs/items/bulk",
+        json!([{"id": "1", "content": "hello"}]),
+    );
+    let (status, _body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------
 // Backup endpoint tests
 // ---------------------------------------------------------------------------
 
