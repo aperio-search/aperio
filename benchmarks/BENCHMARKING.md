@@ -11,8 +11,8 @@ The benchmarks are easy and fast to be reproducible (less than 1 hour, most of t
 
 This test was performed on 2 Hetzner servers:
 
-- `Client` (CCX13 - Dedicated vCPU): 2 vCPUs, 8GB RAM, 80GB NVMe SSD
 - `Worker` (Bare Metal from Server Auction): AMD Ryzen 7 7700, 2x RAM 32768 MB DDR5, 2 x SSD M.2 NVMe 1 TB, NIC 1 Gbit - Intel i225-LM
+- `Client` (CCX13 - Dedicated vCPU): 2 vCPUs, 8GB RAM, 80GB NVMe SSD
 
 Both running Debian 13.
 
@@ -47,7 +47,8 @@ gunzip title.basics.tsv.gz
 BASE_URL="https://dumps.wikimedia.org/other/mediawiki_content_current/enwiki/2026-06-01/xml/bzip2/"
 curl -s "${BASE_URL}SHA256SUMS" | awk '{print $2}' | grep '\.xml\.bz2$' | sed "s|^|${BASE_URL}|" > urls.txt
 aria2c -j 1 -x 1 -s 1 --max-connection-per-server=1 -i urls.txt
-ls *.xml.bz2 | xargs -P 4 -n 1 bunzip2
+ls *.bz2 | xargs -n 2 -P 0 bunzip2
+bun add wtf_wikipedia sax
 
 touch index.ts benchmark.ts
 ```
@@ -65,6 +66,8 @@ bun index.ts
 # Make sure the indexing queue is on 0 before benchmarking
 curl "http://[worker_ip]:3000/queue" -H "Authorization: SecretApiKey"
 ```
+
+You can also index the dataset on the Worker, if you prefer. As CCX13 only has 80GB of SSD, the `massive` dataset was indexed on worker.
 
 ### Benchmarking
 

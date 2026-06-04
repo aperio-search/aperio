@@ -1,5 +1,5 @@
 const BASE_URL = "http://localhost:3000";
-const COLLECTION_NAME = "imdb_titles";
+const COLLECTION_NAME = "wikipedia";
 const API_SECRET = "SecretApiKey";
 const DURATION_MS = 5000;
 const TARGET_QPS = 50;
