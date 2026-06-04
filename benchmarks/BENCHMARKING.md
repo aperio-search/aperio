@@ -2,10 +2,22 @@
 
 The benchmarks are easy and fast to be reproducible (less than 1 hour, most of the time spent on indexing).
 
+## Results
+
+On the benchmarks, RAM was limited to 256 MB.
+
+| Dataset | Throughput | Avg Latency | p95 | p99 | Max Latency |
+|---|---|---|---|---|---|
+| Small (Books) | 14,300.20 QPS | 0.011 ms | 0.016 ms | 0.021 ms | 1.114 ms |
+| Large (IMDb) | 14,809.80 QPS | 0.060 ms | 0.113 ms | 0.547 ms | 8.042 ms |
+| Massive (Wikipedia) | — | — | — | — | — |
+
 ## Datasets
 
-- Small: [Books](https://github.com/MainakRepositor/Datasets/blob/master/books.csv) - 11,127 items (1.5MB)
-- Large: [IMDb Titles](https://datasets.imdbws.com) - 12,533,197 items (1.1GB)
+| Dataset | Items | Size |
+|---|---|---|
+| Small — [Books](https://github.com/MainakRepositor/Datasets/blob/master/books.csv) | 11,127 | 1.5 MB |
+| Large — [IMDb Titles](https://datasets.imdbws.com) | 12,533,197 | 1.1 GB |
 
 ## Reproducing
 
