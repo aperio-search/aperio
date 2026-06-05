@@ -24,9 +24,12 @@
   <a href="https://aperiosearch.com/quickstart.html">Quickstart</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="https://aperiosearch.com/about.html">About</a>
+  <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
+  <a href="https://github.com/aperio-search/aperio/blob/main/benchmarks/BENCHMARKING.md">Benchmarks</a>
   <br />
 </div>
 
+### [Aperio can search across 900GBs of data in < 1ms using less then 256MB of RAM. Check benchmarks →](/Benchmarks.md)
 ### [Read the docs →](https://aperiosearch.com)
 
 ## What is Aperio?
@@ -36,7 +39,7 @@ Aperio is an screamingly fast, ultra-lightweight search engine built on top of [
 ## Features
 
 - **Screamingly Fast**: Engineered for performance, delivering ultra-low latency search results.
-- **Low RAM Footprint**: Highly resource-efficient, keeping memory usage minimal even with massive datasets.
+- **Low RAM Footprint**: Highly resource-efficient, keeping memory usage minimal.
 - **Full Unicode Support**: Built-in normalization and encoding compatibility to handle global data flawlessly.
 - **DevOps-Free**: Easy to deploy, configure, and maintain without needing dedicated DevOps expertise.
 
