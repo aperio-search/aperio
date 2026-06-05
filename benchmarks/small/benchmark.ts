@@ -2,7 +2,7 @@ const BASE_URL = "http://localhost:3000";
 const COLLECTION_NAME = "books";
 const API_SECRET = "SecretApiKey";
 const DURATION_MS = 5000; // Hard 5-second test window
-const TARGET_QPS = 50; // <--- SET YOUR DESIRED QPS HERE
+const TARGET_QPS = 10; // <--- SET YOUR DESIRED QPS HERE
 const MAX_CONCURRENT_REQUESTS = 100; // Safety valve ceiling
 const REQUEST_TIMEOUT_MS = 2000; // Drop hanging connections after 2s
 

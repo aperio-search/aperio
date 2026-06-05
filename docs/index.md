@@ -3,7 +3,6 @@
 layout: home
 
 hero:
-  name: "Aperio"
   text: "Screamingly fast, ultra-lightweight search engine."
   actions:
     - theme: brand
@@ -12,6 +11,9 @@ hero:
     - theme: alt
       text: GitHub
       link: https://github.com/aperio-search/aperio
+    - theme: alt
+      text: Benchmarks
+      link: https://github.com/aperio-search/aperio/blob/main/benchmarks/Benchmarking.md
 
 features:
   - title: Screamingly Fast
@@ -28,7 +30,7 @@ features:
     details: Built from the ground up to support any language with zero configuration required.
   - title: Resource-Efficient
     icon: 💾
-    details: Highly resource-efficient, keeping memory usage minimal even with massive datasets.
+    details: Highly resource-efficient, keeping memory usage minimal.
   - title: Zero-Config Deployment
     icon: 🛠️
     details: Drop it in and let it run with zero initial setup, while remaining highly configurable for advanced tweaks and custom tuning.
