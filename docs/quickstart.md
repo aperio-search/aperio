@@ -4,9 +4,8 @@
 
 Aperio is an screamingly fast search engine designed to use minimal resource consumption. To maintain this extreme efficiency and high throughput, Aperio bypasses heavy, resource-intensive features in favor of a lean architecture:
 
-- **Ordering**: only supported by `ID ASC` or `ID DESC`;
+- **Ordering**: only supported by ID `ASC` or `DESC`. Relevance is not supported, documents either match the query or they don't.
 - **Filtering**: Not supported directly. However, you can easily bypass this by structuring your collections. For example, if you want to search messages by a specific user, you can simply create a dedicated collection named `messages:[userId]`.
-- **Search Relevance**: Not supported. If you search for a term, Aperio will return all documents containing that term, but it won't rank them.
 
 ## Installation
 
