@@ -51,7 +51,7 @@ Aperio runs on Linux (x64 & arm64) and macOS (x64 & Apple Silicon).
 
 ```bash
 docker pull ghcr.io/aperio-search/aperio
-docker run --rm -p 3000:3000 -v "$(pwd)/data:/data" ghcr.io/aperio-search/aperio
+docker run -p 3000:3000 -v "$(pwd)/data:/data" ghcr.io/aperio-search/aperio
 ```
 
 ## Architecture
