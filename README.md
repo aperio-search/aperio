@@ -29,7 +29,7 @@
   <br />
 </div>
 
-### [Aperio can search across 900GBs of data in < 1ms using less then 256MB of RAM. Check benchmarks →](/Benchmarks.md)
+### [Aperio can search across GBs of data in < 1ms using less then 256MB of RAM. Check benchmarks →](/Benchmarks.md)
 ### [Read the docs →](https://aperiosearch.com)
 
 ## What is Aperio?
