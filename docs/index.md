@@ -31,7 +31,7 @@ features:
   - title: Resource-Efficient
     icon: 💾
     details: Highly resource-efficient, keeping memory usage minimal.
-  - title: Zero-Config Deployment
+  - title: Works out of the box
     icon: 🛠️
     details: Drop it in and let it run with zero initial setup, while remaining highly configurable for advanced tweaks and custom tuning.
   - title: Cross-Platform Native
