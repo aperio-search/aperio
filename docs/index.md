@@ -13,7 +13,7 @@ hero:
       link: https://github.com/aperio-search/aperio
     - theme: alt
       text: Benchmarks
-      link: https://github.com/aperio-search/aperio/blob/main/benchmarks/Benchmarking.md
+      link: https://github.com/aperio-search/aperio/blob/main/benchmarks/Benchmarks.md
 
 features:
   - title: Screamingly Fast
