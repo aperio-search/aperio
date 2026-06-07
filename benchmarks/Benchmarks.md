@@ -55,8 +55,8 @@ gunzip title.basics.tsv.gz
 touch index.ts benchmark.ts
 ```
 
-- Small Dataset: copy [small/index.ts](/small/index.ts) code below into `index.ts` and [small/benchmark.ts](/small/benchmark.ts) into `benchmark.ts`. On both files replace `localhost` with the IP of Worker.
-- Medium Dataset: copy [medium/index.ts](/medium/index.ts) code below into `index.ts` and [medium/benchmark.ts](/medium/benchmark.ts) into `benchmark.ts`. On both files replace `localhost` with the IP of Worker.
+- Small Dataset: copy [small/index.ts](/benchmarks/small/index.ts) code below into `index.ts` and [small/benchmark.ts](/benchmarks/small/benchmark.ts) into `benchmark.ts`. On both files replace `localhost` with the IP of Worker.
+- Medium Dataset: copy [medium/index.ts](/benchmarks/medium/index.ts) code below into `index.ts` and [medium/benchmark.ts](/benchmarks/medium/benchmark.ts) into `benchmark.ts`. On both files replace `localhost` with the IP of Worker.
 
 ### Indexing Data
 
