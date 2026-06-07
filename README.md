@@ -25,11 +25,11 @@
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="https://aperiosearch.com/about.html">About</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="https://github.com/aperio-search/aperio/blob/main/benchmarks/BENCHMARKING.md">Benchmarks</a>
+  <a href="https://github.com/aperio-search/aperio/blob/main/benchmarks/Benchmarks.md">Benchmarks</a>
   <br />
 </div>
 
-### [Aperio can search across GBs of data in < 1ms using less then 256MB of RAM. Check benchmarks →](/Benchmarks.md)
+### [Aperio can search across GBs of data in < 1ms using less then 256MB of RAM. Check benchmarks →](/benchmarks/Benchmarks.md)
 ### [Read the docs →](https://aperiosearch.com)
 
 ## What is Aperio?
