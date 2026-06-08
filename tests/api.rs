@@ -299,6 +299,53 @@ async fn create_collection_invalid_id_type() {
 }
 
 #[tokio::test]
+async fn search_rejects_empty_q() {
+    // Regression: previously an empty `q` returned 200 with empty results,
+    // hiding a likely client error. The contract is `q` is required.
+    let (app, _dir, _store) = test_app();
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    for path in [
+        "/collections/docs/search?q=",
+        "/collections/docs/search?q=%20%20",
+    ] {
+        let (status, body) = send(&app, get_request(path)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "path={path}");
+        assert!(
+            body["error"]
+                .as_str()
+                .map(|s| s.contains("q"))
+                .unwrap_or(false),
+            "body should reference the q param: {body:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn suggest_rejects_empty_q() {
+    let (app, _dir, _store) = test_app();
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+
+    for path in [
+        "/collections/docs/suggest?q=",
+        "/collections/docs/suggest?q=%20",
+    ] {
+        let (status, _body) = send(&app, get_request(path)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "path={path}");
+    }
+}
+
+#[tokio::test]
 async fn upsert_and_search() {
     let (app, _dir, store) = test_app();
 

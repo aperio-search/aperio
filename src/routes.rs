@@ -120,6 +120,11 @@ async fn search(
     let take = params.take.unwrap_or(20).clamp(1, 100);
     let after = params.after.clone();
     let q = params.q;
+    if q.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "query parameter 'q' is required and must be non-empty".into(),
+        ));
+    }
     let store = Arc::clone(&state.store);
     let t0 = std::time::Instant::now();
     let results = tokio::task::spawn_blocking({
@@ -152,6 +157,11 @@ async fn suggest(
     Query(params): Query<SuggestParams>,
 ) -> Result<Json<SuggestResponse>, AppError> {
     let take = params.take.unwrap_or(10).clamp(1, 100);
+    if params.q.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "query parameter 'q' is required and must be non-empty".into(),
+        ));
+    }
     let store = Arc::clone(&state.store);
     let results = tokio::task::spawn_blocking({
         let collection = collection.clone();
