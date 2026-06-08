@@ -50,21 +50,17 @@ pub fn export_snapshot(env: &heed::Env) -> Result<Vec<u8>, AppError> {
     Ok(buf)
 }
 
-fn clear_all_tables(env: &heed::Env) -> Result<(), AppError> {
-    let mut wtxn = env.write_txn()?;
-    for name in &TABLE_NAMES {
-        if let Ok(db) = env.create_database::<Raw, Raw>(&mut wtxn, Some(name)) {
-            db.clear(&mut wtxn)?;
-        }
-    }
-    wtxn.commit()?;
-    Ok(())
+/// Parsed, in-memory representation of one table within a snapshot.
+struct ParsedTable {
+    name: String,
+    kvs: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-/// Import a previously exported binary snapshot into the database.
-pub fn import_snapshot(env: &heed::Env, data: &[u8]) -> Result<(), AppError> {
-    clear_all_tables(env)?;
-
+/// Parse the full snapshot payload into memory and validate every byte. This
+/// runs before any mutation of the live database so that a bad upload (wrong
+/// magic, truncated, mismatched table count, etc.) can be rejected without
+/// destroying existing data.
+fn parse_snapshot(data: &[u8]) -> Result<Vec<ParsedTable>, AppError> {
     let mut reader = std::io::BufReader::new(data);
 
     let mut magic = [0u8; 8];
@@ -86,11 +82,15 @@ pub fn import_snapshot(env: &heed::Env, data: &[u8]) -> Result<(), AppError> {
 
     let mut count_buf = [0u8; 4];
     reader.read_exact(&mut count_buf)?;
-    let _table_count = u32::from_le_bytes(count_buf);
+    let table_count = u32::from_le_bytes(count_buf);
+    if table_count != TABLE_COUNT {
+        return Err(AppError::BadRequest(format!(
+            "unexpected table count {table_count}, expected {TABLE_COUNT}"
+        )));
+    }
 
-    let mut wtxn = env.write_txn()?;
-
-    for _ in 0..TABLE_COUNT {
+    let mut tables = Vec::with_capacity(table_count as usize);
+    for _ in 0..table_count {
         let mut len_buf = [0u8; 2];
         reader.read_exact(&mut len_buf)?;
         let name_len = u16::from_le_bytes(len_buf) as usize;
@@ -104,8 +104,7 @@ pub fn import_snapshot(env: &heed::Env, data: &[u8]) -> Result<(), AppError> {
         reader.read_exact(&mut kv_count_buf)?;
         let kv_count = u64::from_le_bytes(kv_count_buf);
 
-        let db = env.create_database::<Raw, Raw>(&mut wtxn, Some(&name))?;
-
+        let mut kvs = Vec::with_capacity(kv_count.min(1024) as usize);
         for _ in 0..kv_count {
             let mut kl_buf = [0u8; 4];
             reader.read_exact(&mut kl_buf)?;
@@ -117,12 +116,38 @@ pub fn import_snapshot(env: &heed::Env, data: &[u8]) -> Result<(), AppError> {
             let val_len = u32::from_le_bytes(vl_buf) as usize;
             let mut value = vec![0u8; val_len];
             reader.read_exact(&mut value)?;
+            kvs.push((key, value));
+        }
+        tables.push(ParsedTable { name, kvs });
+    }
+    Ok(tables)
+}
+
+/// Import a previously exported binary snapshot into the database. The
+/// payload is fully parsed and validated before any mutation occurs, and the
+/// clear + load is done in a single write txn so that a partial failure
+/// rolls back to the previous on-disk state instead of leaving an empty DB.
+pub fn import_snapshot(env: &heed::Env, data: &[u8]) -> Result<(), AppError> {
+    let tables = parse_snapshot(data)?;
+
+    let mut wtxn = env.write_txn()?;
+
+    // Clear existing tables in the same txn as the load so a write error
+    // aborts both.
+    for name in &TABLE_NAMES {
+        if let Some(db) = env.open_database::<Raw, Raw>(&wtxn, Some(name))? {
+            db.clear(&mut wtxn)?;
+        }
+    }
+
+    for table in tables {
+        let db = env.create_database::<Raw, Raw>(&mut wtxn, Some(&table.name))?;
+        for (key, value) in &table.kvs {
             db.put(&mut wtxn, key.as_slice(), value.as_slice())?;
         }
     }
 
     wtxn.commit()?;
-
     Ok(())
 }
 

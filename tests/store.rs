@@ -485,6 +485,63 @@ fn export_import_bad_magic() {
     assert!(err.to_string().contains("bad magic"), "got: {err}");
 }
 
+#[test]
+fn import_with_bad_payload_does_not_wipe_existing_data() {
+    // Regression: previously `import_snapshot` called `clear_all_tables` (which
+    // committed its own write txn) before parsing the payload. Any bad upload
+    // — wrong magic, truncation, etc. — left the database permanently empty.
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "a", "content": "important data"}))
+        .unwrap();
+    store.flush().unwrap();
+
+    // Various bad payloads.
+    let bad_payloads: [&[u8]; 4] = [
+        b"garbage data",     // wrong magic
+        b"APIOEXPT",         // magic but truncated
+        b"APIOEXPT\x99\x00\x00\x00", // wrong version
+        b"",                 // empty
+    ];
+    for payload in bad_payloads {
+        let _ = store.import_snapshot(payload); // ignore error variant
+        // The original document must still be there.
+        let res = store.search("docs", "important", false, 10, None).unwrap();
+        assert_eq!(
+            res.len(),
+            1,
+            "data wiped after bad import (payload len {})",
+            payload.len()
+        );
+    }
+}
+
+#[test]
+fn import_with_truncated_table_data_does_not_wipe_existing_data() {
+    // A valid header but a truncated table body must also leave the existing
+    // database intact.
+    let (store, _dir) = create_store();
+    store
+        .create_collection("docs", "string", &["content".into()])
+        .unwrap();
+    store
+        .upsert("docs", json!({"id": "a", "content": "important data"}))
+        .unwrap();
+    store.flush().unwrap();
+
+    // Take a real export and cut off the trailing bytes.
+    let full = store.export_snapshot().unwrap();
+    // Drop the last quarter to guarantee mid-record truncation.
+    let truncated = &full[..full.len() * 3 / 4];
+    let _ = store.import_snapshot(truncated);
+
+    let res = store.search("docs", "important", false, 10, None).unwrap();
+    assert_eq!(res.len(), 1, "data wiped after truncated import");
+}
+
 // ---------------------------------------------------------------------------
 // FST / suggest integration tests
 // ---------------------------------------------------------------------------
