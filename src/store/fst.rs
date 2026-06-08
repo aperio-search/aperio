@@ -116,15 +116,18 @@ impl CollectionFST {
             .finish()
             .map_err(|e| format!("fst finish error: {e}"))?;
 
-        self.set = None;
-
+        // Rename first, *then* re-read. If re-read fails we must leave
+        // `pending_push`/`pending_pop` intact so the next consolidate retries
+        // — clearing them here would silently drop vocabulary updates.
         std::fs::rename(&tmp_path, &self.path)
             .map_err(|e| format!("failed to rename fst file: {e}"))?;
 
-        self.set = std::fs::read(&self.path)
-            .ok()
-            .and_then(|data| Set::new(data).ok());
+        let new_data = std::fs::read(&self.path)
+            .map_err(|e| format!("failed to read consolidated fst file: {e}"))?;
+        let new_set =
+            Set::new(new_data).map_err(|e| format!("consolidated fst file is invalid: {e}"))?;
 
+        self.set = Some(new_set);
         self.pending_push.clear();
         self.pending_pop.clear();
         self.dirty.store(false, Ordering::Release);
