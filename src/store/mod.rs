@@ -210,7 +210,7 @@ impl Store {
             fst_pool.clear_all();
         }
 
-        Self {
+        let store = Self {
             env,
             db_meta,
             db_queue,
@@ -221,7 +221,81 @@ impl Store {
             collections: RwLock::new(collections),
             next_seq: AtomicU64::new(next_seq),
             fst_pool,
+        };
+
+        // Warm the collections cache from persisted metadata before any
+        // request can race in. Without this, the background indexer can run
+        // before any user request has called `validate_collection_exists`,
+        // see an empty cache, and incorrectly conclude that queued items
+        // reference unknown collections — dropping them. Warming is
+        // best-effort: any failure leaves the cache empty and the
+        // db_meta-fallback path inside `process_pending_queue` will recover
+        // each entry lazily on first access.
+        if let Err(e) = store.warm_collections_cache() {
+            tracing::warn!(
+                error = %e,
+                "failed to warm collections cache at startup; the db_meta fallback in process_pending_queue will recover lazily"
+            );
         }
+
+        store
+    }
+
+    /// Populate the in-memory collections cache from `db_meta`. Idempotent —
+    /// callable at startup or after an external state change. Iteration
+    /// errors and individual decode errors are logged but do not abort the
+    /// warming pass, so one malformed row cannot break the whole startup
+    /// path.
+    fn warm_collections_cache(&self) -> Result<(), AppError> {
+        let rtxn = self.env.read_txn()?;
+        let iter = self.db_meta.iter(&rtxn)?;
+        let mut loaded = 0usize;
+        for entry in iter {
+            let (name_bytes, value) = match entry {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::error!(error = %e, "iter error walking db_meta during warm");
+                    continue;
+                }
+            };
+            let name = match std::str::from_utf8(&name_bytes) {
+                Ok(s) => s.to_string(),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "skipping non-utf8 collection name in db_meta during warm"
+                    );
+                    continue;
+                }
+            };
+            let meta = match decode_rkyv!(config::CollectionMeta, &value) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(
+                        collection = %name,
+                        error = %e,
+                        "skipping undecodable collection meta during warm"
+                    );
+                    continue;
+                }
+            };
+            match self.collections.write() {
+                Ok(mut map) => {
+                    map.insert(name, meta);
+                    loaded += 1;
+                }
+                Err(e) => {
+                    // Poisoned lock — log and abort the warm; subsequent
+                    // callers will hit the same poison and recover via the
+                    // lazy fallback.
+                    return Err(AppError::Internal(format!(
+                        "collections cache lock poisoned during warm: {e}"
+                    )));
+                }
+            }
+        }
+        tracing::debug!(loaded, "warmed collections cache from db_meta");
+        Ok(())
     }
 
     fn init_next_seq(env: &heed::Env, db_queue: DbBytes) -> u64 {
@@ -430,22 +504,47 @@ impl Store {
                 }
             };
 
-            let meta = match self
+            // Look up the collection meta, falling back to db_meta on cache
+            // miss (the cache is empty until something populates it; without
+            // this fallback the background indexer could drop every queued
+            // item on process restart before any user request had warmed
+            // the cache).
+            let cache_hit = self
                 .collections
                 .read()
                 .unwrap()
                 .get(&entry.collection)
-                .cloned()
-            {
+                .cloned();
+            let meta = match cache_hit {
                 Some(m) => m,
-                None => {
-                    tracing::error!(
-                        collection = %entry.collection,
-                        "queued item references unknown collection"
-                    );
-                    self.db_queue.delete(&mut wtxn, key.as_slice())?;
-                    continue;
-                }
+                None => match self.db_meta.get(&wtxn, entry.collection.as_bytes())? {
+                    Some(data) => match decode_rkyv!(config::CollectionMeta, &data) {
+                        Ok(m) => {
+                            self.collections
+                                .write()
+                                .unwrap()
+                                .insert(entry.collection.clone(), m.clone());
+                            m
+                        }
+                        Err(decode_err) => {
+                            tracing::error!(
+                                collection = %entry.collection,
+                                error = %decode_err,
+                                "dropping queue entry: collection meta in db_meta is undecodable"
+                            );
+                            self.db_queue.delete(&mut wtxn, key.as_slice())?;
+                            continue;
+                        }
+                    },
+                    None => {
+                        tracing::error!(
+                            collection = %entry.collection,
+                            "dropping queue entry: collection does not exist in db_meta"
+                        );
+                        self.db_queue.delete(&mut wtxn, key.as_slice())?;
+                        continue;
+                    }
+                },
             };
 
             // Resolve the id once, against the collection's id_type. For
@@ -1293,7 +1392,10 @@ mod tests {
         // banana was in the original content but removed in the second upsert
         // — must no longer be searchable.
         let r1 = store.search("docs", "banana", false, 10, None)?;
-        assert!(r1.is_empty(), "expected banana to be reindexed away: {r1:?}");
+        assert!(
+            r1.is_empty(),
+            "expected banana to be reindexed away: {r1:?}"
+        );
         // cherry was added in the second upsert.
         let r2 = store.search("docs", "cherry", false, 10, None)?;
         assert_eq!(ids(&r2), vec!["1"]);
@@ -1686,6 +1788,54 @@ mod tests {
         assert!(matches!(res, Err(AppError::BadRequest(_))));
         // Safe name still works.
         store.create_collection("foo_bar", "string", &[])?;
+        Ok(())
+    }
+
+    #[test]
+    fn process_pending_queue_survives_restart_with_unwarmed_cache() -> Result<(), AppError> {
+        // Regression: previously `process_pending_queue` only consulted the
+        // in-memory collections cache. After a process restart (or any code
+        // path where the background indexer fires before any user request),
+        // the cache was empty and every queued item was logged as "unknown
+        // collection" and DELETED from the queue — silent data loss.
+        let dir =
+            tempfile::TempDir::new().map_err(|e| AppError::Internal(format!("tempdir: {e}")))?;
+
+        // First "process": create collection, queue an item, but never flush.
+        {
+            let env = unsafe {
+                heed::EnvOpenOptions::new()
+                    .map_size(10 * 1024 * 1024)
+                    .max_dbs(4)
+                    .open(dir.path())?
+            };
+            let store = Store::new(env, dir.path().join("fst"));
+            store.create_collection("docs", "string", &["content".into()])?;
+            store.upsert("docs", json!({"id": "1", "content": "important data"}))?;
+            // No flush — the entry must persist in db_queue across restart.
+            assert!(store.queue_depth()? > 0);
+        }
+
+        // Second "process": reopen the same env. The collections cache
+        // starts empty until warming runs; the background indexer (here,
+        // our flush call) must still find the collection and index the
+        // queued item.
+        {
+            let env = unsafe {
+                heed::EnvOpenOptions::new()
+                    .map_size(10 * 1024 * 1024)
+                    .max_dbs(4)
+                    .open(dir.path())?
+            };
+            let store = Store::new(env, dir.path().join("fst"));
+            // Drive the indexer without calling validate_collection_exists
+            // (which would otherwise warm the cache as a side effect).
+            store.flush()?;
+            // The queue must be drained AND the document must be searchable.
+            assert_eq!(store.queue_depth()?, 0, "queue not drained");
+            let results = store.search("docs", "important", false, 10, None)?;
+            assert_eq!(ids(&results), vec!["1"]);
+        }
         Ok(())
     }
 
