@@ -67,7 +67,6 @@ pub struct StoreConfig {
     pub index_interval: Duration,
     pub max_queue_batch_size: usize,
     pub fst_config: FSTConfig,
-    pub fst_consolidate_interval: Duration,
     pub fuzzy_max_expansions: usize,
 }
 
@@ -81,7 +80,6 @@ impl Default for StoreConfig {
             index_interval: Duration::from_millis(900),
             max_queue_batch_size: 5000,
             fst_config: FSTConfig::default(),
-            fst_consolidate_interval: Duration::from_secs(60),
             fuzzy_max_expansions: 3,
         }
     }

@@ -61,7 +61,6 @@ impl AppConfig {
             index_interval: Duration::from_millis(self.index_interval_ms.unwrap_or(900)),
             max_queue_batch_size: self.max_queue_batch_size.unwrap_or(5000),
             fst_config: base,
-            fst_consolidate_interval: Duration::from_secs(60),
             fuzzy_max_expansions: self.fuzzy_max_expansions.unwrap_or(3),
         }
     }
@@ -193,6 +192,25 @@ search_api_key = "custom-search-key"
         assert_eq!(store_cfg.max_roaring_shard_size, 50_000);
         assert_eq!(store_cfg.index_interval, Duration::from_millis(300));
         assert_eq!(store_cfg.max_queue_batch_size, 500);
+    }
+
+    #[test]
+    fn fst_consolidate_interval_secs_is_wired_through() {
+        // Regression test: previously the outer StoreConfig had a dead
+        // `fst_consolidate_interval: Duration` field that looked like the
+        // configurable knob but was never read; the real consumer is
+        // FSTConfig.consolidate_after_secs. Make sure setting the config
+        // option actually changes the value the FST consults.
+        let app_cfg = AppConfig {
+            fst_consolidate_interval_secs: Some(123),
+            ..AppConfig::default()
+        };
+        let store_cfg = app_cfg.merge_into_store_config();
+        assert_eq!(store_cfg.fst_config.consolidate_after_secs, 123);
+
+        // And the default should match the documented 300s default.
+        let default_cfg = AppConfig::default().merge_into_store_config();
+        assert_eq!(default_cfg.fst_config.consolidate_after_secs, 300);
     }
 
     #[test]
