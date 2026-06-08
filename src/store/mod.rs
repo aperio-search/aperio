@@ -95,11 +95,19 @@ fn extract_id(doc: &serde_json::Value, id_type: IdType) -> Result<String, AppErr
             AppError::BadRequest("'id' must be a string for string collection".into())
         }),
         IdType::Number => match id_val {
-            serde_json::Value::Number(n) => Ok(n.to_string()),
+            // Only accept JSON numbers that round-trip to a u64. This rejects
+            // floats (incl. whole-number floats like 1.0, whose to_string()
+            // would be "1.0" and break later u64 parsing) and negatives.
+            serde_json::Value::Number(n) => n.as_u64().map(|v| v.to_string()).ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "'id' must be a non-negative integer that fits in u64 for number collection, got {n}"
+                ))
+            }),
+            // Also accept stringified integers — but only those that parse as
+            // u64, not "1.0", "1e3", "+1", etc.
             serde_json::Value::String(s) => s.parse::<u64>().map(|n| n.to_string()).map_err(|_| {
                 AppError::BadRequest(format!(
-                    "'id' must be a valid number for number collection, got '{}'",
-                    s
+                    "'id' must be a valid non-negative integer for number collection, got '{s}'"
                 ))
             }),
             _ => Err(AppError::BadRequest(

@@ -299,6 +299,70 @@ async fn create_collection_invalid_id_type() {
 }
 
 #[tokio::test]
+async fn upsert_rejects_non_integer_numeric_id() {
+    // Regression: previously a JSON Number was accepted for a number-id
+    // collection regardless of whether it was an integer (1.0 → "1.0"), which
+    // later failed parse::<u64>() at index time and stalled the queue.
+    let (app, _dir, _store) = test_app();
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "number", "searchable_fields": ["content"]}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Float that's a whole number — still must be rejected.
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": 1.0, "content": "hello"}),
+    );
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("id"),
+        "{body:?}"
+    );
+
+    // Negative number.
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": -5, "content": "hello"}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Real float.
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": 1.5, "content": "hello"}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // String "1.0" too — same shape that produces invalid stored id.
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": "1.0", "content": "hello"}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Sanity: a real u64 still works.
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": 42, "content": "hello"}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn search_rejects_empty_q() {
     // Regression: previously an empty `q` returned 200 with empty results,
     // hiding a likely client error. The contract is `q` is required.
