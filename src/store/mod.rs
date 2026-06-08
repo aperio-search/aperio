@@ -985,24 +985,58 @@ impl Store {
 
         let mut wtxn = self.env.write_txn()?;
 
-        let doc_keys: Vec<Vec<u8>> = self
+        // Collect doc keys to delete. Any per-row iteration error is
+        // logged and the offending row is skipped — the deletion of a
+        // collection should not abort if one row is unreadable. The
+        // outer `prefix_iter` failure is propagated as AppError so the
+        // operator gets a 500 and a server-log entry rather than a
+        // process panic.
+        let doc_iter = self
             .db_docs
             .prefix_iter(&wtxn, prefix.as_slice())
-            .unwrap_or_else(|_| panic!("prefix_iter on docs for deletion"))
-            .filter_map(|r| r.ok())
-            .map(|(k, _)| k.to_vec())
-            .collect();
+            .map_err(|e| {
+                AppError::Internal(format!(
+                    "delete_collection: failed to open db_docs prefix iter for '{collection}': {e}"
+                ))
+            })?;
+        let mut doc_keys: Vec<Vec<u8>> = Vec::new();
+        for result in doc_iter {
+            match result {
+                Ok((k, _)) => doc_keys.push(k.to_vec()),
+                Err(iter_err) => {
+                    tracing::error!(
+                        collection = %collection,
+                        error = %iter_err,
+                        "delete_collection: skipping unreadable db_docs entry"
+                    );
+                }
+            }
+        }
         for key in &doc_keys {
             self.db_docs.delete(&mut wtxn, key.as_slice())?;
         }
 
-        let inv_keys: Vec<Vec<u8>> = self
+        let inv_iter = self
             .db_inverted
             .prefix_iter(&wtxn, prefix.as_slice())
-            .unwrap_or_else(|_| panic!("prefix_iter on inverted for deletion"))
-            .filter_map(|r| r.ok())
-            .map(|(k, _)| k.to_vec())
-            .collect();
+            .map_err(|e| {
+                AppError::Internal(format!(
+                    "delete_collection: failed to open db_inverted prefix iter for '{collection}': {e}"
+                ))
+            })?;
+        let mut inv_keys: Vec<Vec<u8>> = Vec::new();
+        for result in inv_iter {
+            match result {
+                Ok((k, _)) => inv_keys.push(k.to_vec()),
+                Err(iter_err) => {
+                    tracing::error!(
+                        collection = %collection,
+                        error = %iter_err,
+                        "delete_collection: skipping unreadable db_inverted entry"
+                    );
+                }
+            }
+        }
         for key in &inv_keys {
             self.db_inverted.delete(&mut wtxn, key.as_slice())?;
         }

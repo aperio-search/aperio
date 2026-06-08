@@ -148,7 +148,31 @@ pub fn add_to_posting_list(
         return Ok(());
     }
 
-    let last_idx = *indices.last().unwrap();
+    // Take the last shard index. We use `match` on `.last()` rather than
+    // `.last().unwrap()` so that any future refactor that loosens the
+    // `is_empty()` precondition above can't silently introduce a panic.
+    // If `indices` is somehow empty here (impossible given the check above
+    // but kept as a defensive arm), log and create shard 0 instead.
+    let last_idx = match indices.last() {
+        Some(idx) => *idx,
+        None => {
+            tracing::error!(
+                collection = %collection,
+                word = %word,
+                "add_to_posting_list: indices unexpectedly empty after non-empty check; creating shard 0"
+            );
+            let shard = PostingShard {
+                ids: vec![id.to_string()],
+            };
+            let value = encode_rkyv!(&shard)?;
+            inverted.put(
+                wtxn,
+                shard_key(collection, word, 0).as_slice(),
+                value.as_slice(),
+            )?;
+            return Ok(());
+        }
+    };
     let last_shard = load_posting_shard(inverted, wtxn, collection, word, last_idx)?
         .unwrap_or_else(|| PostingShard { ids: Vec::new() });
 
@@ -274,7 +298,29 @@ pub fn add_to_roaring_posting_list(
         return Ok(());
     }
 
-    let last_idx = *indices.last().unwrap();
+    // Same defensive treatment as add_to_posting_list: `.last()` is
+    // guaranteed Some by the `is_empty()` check above, but a future
+    // refactor or concurrent mutation could violate that. Log and start a
+    // fresh shard at index 0 instead of panicking.
+    let last_idx = match indices.last() {
+        Some(idx) => *idx,
+        None => {
+            tracing::error!(
+                collection = %collection,
+                word = %word,
+                "add_to_roaring_posting_list: indices unexpectedly empty after non-empty check; creating shard 0"
+            );
+            let mut bitmap = RoaringTreemap::new();
+            bitmap.insert(id);
+            let value = roaring_to_vec(&bitmap)?;
+            inverted.put(
+                wtxn,
+                shard_key(collection, word, 0).as_slice(),
+                value.as_slice(),
+            )?;
+            return Ok(());
+        }
+    };
     let last_key = shard_key(collection, word, last_idx);
     let mut bitmap: RoaringTreemap = match inverted.get(wtxn, last_key.as_slice())? {
         Some(data) => roaring_from_slice(&data)?,
