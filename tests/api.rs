@@ -185,6 +185,56 @@ async fn search_key_cannot_admin() {
 }
 
 #[tokio::test]
+async fn search_key_cannot_access_collection_named_search() {
+    // Regression test: previously check_auth used path.ends_with("/search"),
+    // so a collection literally named "search" was reachable with the public key.
+    let (app, _dir, _store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "search", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = send(&app, search_key_get("/collections/search")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let req = Request::builder()
+        .method(Method::DELETE)
+        .uri("/collections/search")
+        .header("authorization", "PublicApiKey")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn search_key_cannot_delete_item_named_search() {
+    // Regression test: path.ends_with("/suggest") would have matched item id "suggest".
+    let (app, _dir, _store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "string", "searchable_fields": ["content"]}),
+    );
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let req = Request::builder()
+        .method(Method::DELETE)
+        .uri("/collections/docs/items/suggest")
+        .header("authorization", "PublicApiKey")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn get_status() {
     let (app, _dir, _store) = test_app();
     let (status, body) = send(&app, get_request("/status")).await;

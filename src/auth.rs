@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Request, State};
+use axum::extract::MatchedPath;
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -20,9 +21,7 @@ impl Default for AuthConfig {
 }
 
 pub async fn check_auth(State(auth): State<AuthConfig>, req: Request, next: Next) -> Response {
-    let path = req.uri().path();
-
-    if path == "/status" {
+    if req.uri().path() == "/status" {
         return next.run(req).await;
     }
 
@@ -32,22 +31,46 @@ pub async fn check_auth(State(auth): State<AuthConfig>, req: Request, next: Next
         .and_then(|v| v.to_str().ok())
     {
         Some(t) => t,
-        None => {
-            return unauthorized();
-        }
+        None => return unauthorized(),
     };
 
-    let is_search = path.ends_with("/search") || path.ends_with("/suggest");
+    // Use the matched route pattern (e.g. "/collections/{collection}/search")
+    // rather than the raw request path. A user-controlled segment cannot then
+    // be crafted to look like a search-tier route (e.g. a collection literally
+    // named "search" or an item id "suggest").
+    let is_search = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| {
+            let p = m.as_str();
+            p == "/collections/{collection}/search" || p == "/collections/{collection}/suggest"
+        })
+        .unwrap_or(false);
 
     if is_search {
-        if token == auth.main_api_key || token == auth.search_api_key {
+        if constant_time_eq(token.as_bytes(), auth.main_api_key.as_bytes())
+            || constant_time_eq(token.as_bytes(), auth.search_api_key.as_bytes())
+        {
             return next.run(req).await;
         }
-    } else if token == auth.main_api_key {
+    } else if constant_time_eq(token.as_bytes(), auth.main_api_key.as_bytes()) {
         return next.run(req).await;
     }
 
     unauthorized()
+}
+
+/// Constant-time byte-slice equality. Returns false when lengths differ
+/// (an attacker already learns length via TCP framing, so this is fine).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn unauthorized() -> Response {
