@@ -508,11 +508,14 @@ impl Store {
             // miss (the cache is empty until something populates it; without
             // this fallback the background indexer could drop every queued
             // item on process restart before any user request had warmed
-            // the cache).
+            // the cache). A poisoned cache lock is an internal-error
+            // condition; propagate it rather than mask it.
             let cache_hit = self
                 .collections
                 .read()
-                .unwrap()
+                .map_err(|e| {
+                    AppError::Internal(format!("collections cache read lock poisoned: {e}"))
+                })?
                 .get(&entry.collection)
                 .cloned();
             let meta = match cache_hit {
@@ -522,7 +525,11 @@ impl Store {
                         Ok(m) => {
                             self.collections
                                 .write()
-                                .unwrap()
+                                .map_err(|e| {
+                                    AppError::Internal(format!(
+                                        "collections cache write lock poisoned: {e}"
+                                    ))
+                                })?
                                 .insert(entry.collection.clone(), m.clone());
                             m
                         }
