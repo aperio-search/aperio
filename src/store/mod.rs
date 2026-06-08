@@ -86,6 +86,42 @@ fn extract_searchable_content(doc: &serde_json::Value, fields: &[String]) -> Str
     parts.join(" ")
 }
 
+/// Maximum length (in bytes) of a collection name. Collection names appear
+/// inside LMDB keys and FST filenames; capping length keeps both well-behaved
+/// (LMDB's default max key size is 511 bytes, and we want plenty of headroom
+/// for the word + shard suffix).
+const COLLECTION_NAME_MAX_LEN: usize = 64;
+
+/// Validate a collection name against the on-disk safe-character set used by
+/// [`fst::FSTPool::collection_path`]. The FST encoding lossy-maps any
+/// character outside `[A-Za-z0-9_-]` to `_`, so two collections with names
+/// like `"foo bar"` and `"foo/bar"` would map to the same FST file and
+/// silently share / clobber each other's vocabulary indices. By restricting
+/// names to that exact set at creation time we make the encoding bijective
+/// (one collection → one FST file) and remove the collision risk.
+pub(crate) fn validate_collection_name(name: &str) -> Result<(), AppError> {
+    if name.is_empty() {
+        return Err(AppError::BadRequest(
+            "collection name must not be empty".into(),
+        ));
+    }
+    if name.len() > COLLECTION_NAME_MAX_LEN {
+        return Err(AppError::BadRequest(format!(
+            "collection name must be at most {COLLECTION_NAME_MAX_LEN} bytes long, got {}",
+            name.len()
+        )));
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '-'))
+    {
+        return Err(AppError::BadRequest(format!(
+            "collection name '{name}' contains invalid character {bad:?}; only ASCII letters, digits, '_' and '-' are allowed"
+        )));
+    }
+    Ok(())
+}
+
 fn extract_id(doc: &serde_json::Value, id_type: IdType) -> Result<String, AppError> {
     let id_val = doc
         .get("id")
@@ -247,6 +283,7 @@ impl Store {
         id_type: &str,
         searchable_fields: &[String],
     ) -> Result<CollectionCreated, AppError> {
+        validate_collection_name(name)?;
         let id_type_enum = match id_type {
             "number" => IdType::Number,
             "string" => IdType::String,
@@ -1592,6 +1629,62 @@ mod tests {
             .db_queue
             .put(&mut wtxn, seq.to_be_bytes().as_slice(), bytes.as_slice())?;
         wtxn.commit()?;
+        Ok(())
+    }
+
+    #[test]
+    fn collection_name_validator_accepts_safe_names() -> Result<(), AppError> {
+        for name in [
+            "a",
+            "Z",
+            "0",
+            "_",
+            "-",
+            "foo",
+            "Foo123",
+            "my_collection",
+            "my-collection",
+            "ABC_123-xyz",
+        ] {
+            validate_collection_name(name)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn collection_name_validator_rejects_unsafe_names() {
+        // Each name maps to the same FST file as another via the lossy
+        // [^A-Za-z0-9_-] → '_' encoding, OR contains characters that would
+        // not be filesystem-safe across platforms.
+        let bad_names = [
+            "", "foo bar", "foo/bar", "foo\\bar", "foo.bar", "foo:bar", "foo\tbar", "foo\0bar",
+            "../foo", ".", "..", "café", "中文",
+        ];
+        for name in bad_names {
+            let err = validate_collection_name(name).expect_err(name);
+            assert!(matches!(err, AppError::BadRequest(_)), "name={name}");
+        }
+    }
+
+    #[test]
+    fn collection_name_validator_rejects_too_long() {
+        let long: String = "a".repeat(COLLECTION_NAME_MAX_LEN + 1);
+        let err = validate_collection_name(&long).expect_err("too long");
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn create_collection_rejects_colliding_names() -> Result<(), AppError> {
+        // Regression: previously `FSTPool::collection_path` lossy-mapped
+        // any non-[A-Za-z0-9_-] char to '_', so 'foo bar' and 'foo/bar'
+        // both produced 'foo_bar.fst' and overwrote each other.
+        let (store, _dir) = default_store();
+        let res = store.create_collection("foo bar", "string", &[]);
+        assert!(matches!(res, Err(AppError::BadRequest(_))));
+        let res = store.create_collection("foo/bar", "string", &[]);
+        assert!(matches!(res, Err(AppError::BadRequest(_))));
+        // Safe name still works.
+        store.create_collection("foo_bar", "string", &[])?;
         Ok(())
     }
 
