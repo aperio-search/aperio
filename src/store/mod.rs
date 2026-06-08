@@ -105,11 +105,13 @@ fn extract_id(doc: &serde_json::Value, id_type: IdType) -> Result<String, AppErr
             }),
             // Also accept stringified integers — but only those that parse as
             // u64, not "1.0", "1e3", "+1", etc.
-            serde_json::Value::String(s) => s.parse::<u64>().map(|n| n.to_string()).map_err(|_| {
-                AppError::BadRequest(format!(
-                    "'id' must be a valid non-negative integer for number collection, got '{s}'"
-                ))
-            }),
+            serde_json::Value::String(s) => {
+                s.parse::<u64>().map(|n| n.to_string()).map_err(|parse_err| {
+                    AppError::BadRequest(format!(
+                        "'id' must be a valid non-negative integer for number collection, got '{s}': {parse_err}"
+                    ))
+                })
+            }
             _ => Err(AppError::BadRequest(
                 "'id' must be a number for number collection".into(),
             )),
@@ -409,6 +411,35 @@ impl Store {
                 }
             };
 
+            // Resolve the id once, against the collection's id_type. For
+            // number-id collections, parse to u64; if a stale queue entry
+            // has a malformed id (e.g. one written by an older binary that
+            // accepted floats), drop it now — propagating the parse error
+            // would abort the whole batch txn and leave the bad entry in
+            // the queue, stalling indexing permanently. The enum below
+            // carries the parsed value alongside the variant so the call
+            // sites don't need to unwrap an Option.
+            enum ResolvedId<'a> {
+                Number(u64),
+                String(&'a str),
+            }
+            let resolved_id = match meta.id_type {
+                IdType::Number => match entry.id.parse::<u64>() {
+                    Ok(v) => ResolvedId::Number(v),
+                    Err(parse_err) => {
+                        tracing::error!(
+                            collection = %entry.collection,
+                            id = %entry.id,
+                            error = %parse_err,
+                            "dropping queue entry: non-numeric id in number-id collection"
+                        );
+                        self.db_queue.delete(&mut wtxn, key.as_slice())?;
+                        continue;
+                    }
+                },
+                IdType::String => ResolvedId::String(entry.id.as_str()),
+            };
+
             let content = extract_searchable_content(&doc, &meta.searchable_fields);
             let new_words = tokenize(
                 &content,
@@ -448,14 +479,8 @@ impl Store {
 
             if !is_new {
                 for word in old_words.difference(&new_words) {
-                    match meta.id_type {
-                        IdType::Number => {
-                            let id_u64 = entry.id.parse::<u64>().map_err(|_| {
-                                AppError::Internal(format!(
-                                    "invalid numeric id in storage: {}",
-                                    entry.id
-                                ))
-                            })?;
+                    match resolved_id {
+                        ResolvedId::Number(id_u64) => {
                             posting_list::remove_from_roaring_posting_list(
                                 self.db_inverted,
                                 &mut wtxn,
@@ -464,13 +489,13 @@ impl Store {
                                 id_u64,
                             )?;
                         }
-                        IdType::String => {
+                        ResolvedId::String(id_str) => {
                             posting_list::remove_from_posting_list(
                                 self.db_inverted,
                                 &mut wtxn,
                                 &entry.collection,
                                 word,
-                                &entry.id,
+                                id_str,
                             )?;
                         }
                     }
@@ -485,14 +510,8 @@ impl Store {
                 .put(&mut wtxn, doc_key.as_slice(), entry.document.as_slice())?;
 
             for word in &new_words {
-                match meta.id_type {
-                    IdType::Number => {
-                        let id_u64 = entry.id.parse::<u64>().map_err(|_| {
-                            AppError::Internal(format!(
-                                "invalid numeric id in storage: {}",
-                                entry.id
-                            ))
-                        })?;
+                match resolved_id {
+                    ResolvedId::Number(id_u64) => {
                         posting_list::add_to_roaring_posting_list(
                             self.db_inverted,
                             &mut wtxn,
@@ -502,13 +521,13 @@ impl Store {
                             self.config.max_roaring_shard_size,
                         )?;
                     }
-                    IdType::String => {
+                    ResolvedId::String(id_str) => {
                         posting_list::add_to_posting_list(
                             self.db_inverted,
                             &mut wtxn,
                             &entry.collection,
                             word,
-                            &entry.id,
+                            id_str,
                             self.config.max_string_shard_size,
                         )?;
                     }
@@ -1546,5 +1565,66 @@ mod tests {
         assert_eq!(results[0]["id"], "1");
         assert_eq!(results[0]["title"], "hello");
         assert_eq!(results[0]["body"], "world");
+    }
+
+    /// Inject a queue entry directly into LMDB. Used to simulate a stale
+    /// entry left by an older binary that didn't reject malformed ids.
+    /// Returns AppError so call sites must handle failures explicitly
+    /// rather than panicking.
+    fn inject_queue_entry(
+        store: &Store,
+        collection: &str,
+        id: &str,
+        doc: &serde_json::Value,
+    ) -> Result<(), AppError> {
+        let document = serde_json::to_vec(doc).map_err(|e| AppError::Internal(e.to_string()))?;
+        let entry = config::QueuedIndex {
+            collection: collection.to_string(),
+            id: id.to_string(),
+            document,
+        };
+        let seq = store.allocate_seq();
+        let mut wtxn = store.env.write_txn()?;
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&entry)
+            .map(|av| av.to_vec())
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        store
+            .db_queue
+            .put(&mut wtxn, seq.to_be_bytes().as_slice(), bytes.as_slice())?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    #[test]
+    fn process_pending_queue_drops_bad_numeric_id_instead_of_stalling() -> Result<(), AppError> {
+        // Regression test: previously a single queue entry with a non-numeric
+        // id in a number-id collection (e.g., one written by an older binary
+        // before float-id rejection) caused process_pending_queue to abort
+        // its write txn with `?` propagation; the bad entry stayed in the
+        // queue and every subsequent indexing cycle hit it again — permanent
+        // ingest stall.
+        let (store, _dir) = default_store();
+        store.create_collection("docs", "number", &["content".into()])?;
+
+        // Inject the bad entry directly into LMDB, then a good one via the
+        // public API queued behind it.
+        inject_queue_entry(
+            &store,
+            "docs",
+            "not-a-number",
+            &json!({"id": "not-a-number", "content": "should be dropped"}),
+        )?;
+        store.upsert("docs", json!({"id": 42, "content": "should survive"}))?;
+
+        // One process call must clear both: bad one dropped, good one indexed.
+        store.flush()?;
+
+        // Queue must be drained.
+        assert_eq!(store.queue_depth()?, 0, "queue still has entries");
+
+        // The good document is searchable.
+        let results = store.search("docs", "survive", false, 10, None)?;
+        assert_eq!(ids(&results), vec!["42"]);
+        Ok(())
     }
 }

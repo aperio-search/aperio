@@ -97,8 +97,9 @@ fn parse_snapshot(data: &[u8]) -> Result<Vec<ParsedTable>, AppError> {
 
         let mut name_bytes = vec![0u8; name_len];
         reader.read_exact(&mut name_bytes)?;
-        let name = String::from_utf8(name_bytes)
-            .map_err(|_| AppError::BadRequest("invalid table name in export".into()))?;
+        let name = String::from_utf8(name_bytes).map_err(|utf8_err| {
+            AppError::BadRequest(format!("invalid table name in export: {utf8_err}"))
+        })?;
 
         let mut kv_count_buf = [0u8; 8];
         reader.read_exact(&mut kv_count_buf)?;
