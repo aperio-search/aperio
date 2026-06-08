@@ -887,9 +887,29 @@ async fn import_requires_main_key() {
 #[tokio::test]
 async fn import_nonexistent_file_returns_error() {
     let (app, _dir, _store) = test_app();
-    let req = main_key_post("/backup/import", json!({"name": "nope.bin"}));
+    let req = main_key_post("/backup/import", json!({"name": "nope.aperio"}));
     let (status, _body) = send(&app, req).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn import_rejects_path_traversal() {
+    // Regression: previously `dumps.join(&name)` accepted "../" segments,
+    // letting a caller read (and then attempt to import) any file the
+    // process could open.
+    let (app, _dir, _store) = test_app();
+    for bad in [
+        "../etc/passwd",
+        "../../etc/passwd",
+        "/etc/passwd",
+        "foo/bar.aperio",
+        "foo\\bar.aperio",
+        "..",
+    ] {
+        let req = main_key_post("/backup/import", json!({ "name": bad }));
+        let (status, _body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "name={bad}");
+    }
 }
 
 #[tokio::test]

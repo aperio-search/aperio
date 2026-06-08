@@ -277,10 +277,11 @@ async fn import_handler(
     let dumps = require_dumps_folder(&state)?.clone();
     let store = Arc::clone(&state.store);
     let name = body.name;
+    validate_dump_filename(&name)?;
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let path = dumps.join(&name);
         let data = std::fs::read(&path)
-            .map_err(|e| AppError::Internal(format!("failed to read '{}': {e}", name)))?;
+            .map_err(|e| AppError::Internal(format!("failed to read dump: {e}")))?;
         store.import_snapshot(&data)?;
         tracing::info!(file = %name, "import completed");
         Ok(())
@@ -288,6 +289,25 @@ async fn import_handler(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
     Ok(Json(ImportResponse { ok: true }))
+}
+
+/// Reject names that could escape the dumps folder or reach outside files.
+/// We only accept ASCII alphanumerics plus `.`, `_`, `-`, `:`, and require
+/// the `.aperio` suffix that `dump_filename()` produces.
+fn validate_dump_filename(name: &str) -> Result<(), AppError> {
+    let bad = name.is_empty()
+        || name == "."
+        || name == ".."
+        || !name.ends_with(".aperio")
+        || name.chars().any(|c| {
+            !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == ':')
+        });
+    if bad {
+        return Err(AppError::BadRequest(
+            "invalid dump filename: must be ASCII alphanumeric (plus '.', '_', '-', ':') and end with .aperio".into(),
+        ));
+    }
+    Ok(())
 }
 
 async fn not_found() -> (StatusCode, Json<serde_json::Value>) {
