@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::error::AppError;
 use crate::store::{FSTConfig, StoreConfig};
 
-#[derive(Deserialize, Default)]
+#[derive(Debug, Deserialize, Default)]
 pub struct AppConfig {
     pub min_token_length: Option<usize>,
     pub max_token_length: Option<usize>,
@@ -26,16 +27,27 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn load(path: Option<&Path>) -> Self {
+    /// Load configuration from the given TOML file. Returns
+    /// [`AppConfig::default`] if `path` is `None`. On a read or parse
+    /// failure the error is propagated to the caller (formerly panicked)
+    /// so that startup code can log it and exit cleanly instead of
+    /// aborting the process with a backtrace.
+    pub fn load(path: Option<&Path>) -> Result<Self, AppError> {
         let path = match path {
             Some(p) => p,
-            None => return Self::default(),
+            None => return Ok(Self::default()),
         };
-        let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            panic!("failed to read config file '{}': {e}", path.display());
-        });
-        toml::from_str(&content).unwrap_or_else(|e| {
-            panic!("failed to parse config file '{}': {e}", path.display());
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            AppError::Internal(format!(
+                "failed to read config file '{}': {e}",
+                path.display()
+            ))
+        })?;
+        toml::from_str(&content).map_err(|e| {
+            AppError::Internal(format!(
+                "failed to parse config file '{}': {e}",
+                path.display()
+            ))
         })
     }
 
@@ -71,23 +83,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_none_path() {
-        let cfg = AppConfig::load(None);
+    fn load_none_path() -> Result<(), AppError> {
+        let cfg = AppConfig::load(None)?;
         assert!(cfg.min_token_length.is_none());
         assert!(cfg.max_token_length.is_none());
         assert!(cfg.max_string_shard_size.is_none());
         assert!(cfg.max_roaring_shard_size.is_none());
+        Ok(())
     }
 
     #[test]
-    #[should_panic(expected = "failed to read config file")]
-    fn load_invalid_path() {
-        AppConfig::load(Some(std::path::Path::new("/nonexistent/config.toml")));
+    fn load_invalid_path_returns_error() {
+        let err = AppConfig::load(Some(std::path::Path::new("/nonexistent/config.toml")))
+            .expect_err("nonexistent file should error");
+        assert!(
+            err.to_string().contains("failed to read config file"),
+            "got: {err}"
+        );
     }
 
     #[test]
-    fn load_valid_toml() {
-        let dir = tempfile::TempDir::new().unwrap();
+    fn load_valid_toml() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::TempDir::new()?;
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
@@ -100,9 +117,8 @@ log_level = "debug"
 index_interval_ms = 500
 dumps_folder = "/data/dumps"
 "#,
-        )
-        .unwrap();
-        let cfg = AppConfig::load(Some(&path));
+        )?;
+        let cfg = AppConfig::load(Some(&path))?;
         assert_eq!(cfg.min_token_length, Some(3));
         assert_eq!(cfg.max_string_shard_size, Some(500));
         assert_eq!(cfg.max_roaring_shard_size, Some(50000));
@@ -110,21 +126,23 @@ dumps_folder = "/data/dumps"
         assert_eq!(cfg.log_level.as_deref(), Some("debug"));
         assert_eq!(cfg.index_interval_ms, Some(500));
         assert_eq!(cfg.dumps_folder.as_deref(), Some("/data/dumps"));
+        Ok(())
     }
 
     #[test]
-    fn load_partial_toml() {
-        let dir = tempfile::TempDir::new().unwrap();
+    fn load_partial_toml() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::TempDir::new()?;
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, r#"min_token_length = 5"#).unwrap();
-        let cfg = AppConfig::load(Some(&path));
+        std::fs::write(&path, r#"min_token_length = 5"#)?;
+        let cfg = AppConfig::load(Some(&path))?;
         assert_eq!(cfg.min_token_length, Some(5));
         assert!(cfg.max_string_shard_size.is_none());
+        Ok(())
     }
 
     #[test]
-    fn load_with_api_keys() {
-        let dir = tempfile::TempDir::new().unwrap();
+    fn load_with_api_keys() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::TempDir::new()?;
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
@@ -132,27 +150,32 @@ dumps_folder = "/data/dumps"
 main_api_key = "custom-main-key"
 search_api_key = "custom-search-key"
 "#,
-        )
-        .unwrap();
-        let cfg = AppConfig::load(Some(&path));
+        )?;
+        let cfg = AppConfig::load(Some(&path))?;
         assert_eq!(cfg.main_api_key.as_deref(), Some("custom-main-key"));
         assert_eq!(cfg.search_api_key.as_deref(), Some("custom-search-key"));
+        Ok(())
     }
 
     #[test]
-    fn load_without_api_keys() {
-        let cfg = AppConfig::load(None);
+    fn load_without_api_keys() -> Result<(), AppError> {
+        let cfg = AppConfig::load(None)?;
         assert!(cfg.main_api_key.is_none());
         assert!(cfg.search_api_key.is_none());
+        Ok(())
     }
 
     #[test]
-    #[should_panic(expected = "failed to parse config file")]
-    fn load_invalid_toml() {
-        let dir = tempfile::TempDir::new().unwrap();
+    fn load_invalid_toml_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::TempDir::new()?;
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "not valid toml {{{").unwrap();
-        AppConfig::load(Some(&path));
+        std::fs::write(&path, "not valid toml {{{")?;
+        let err = AppConfig::load(Some(&path)).expect_err("malformed toml should error");
+        assert!(
+            err.to_string().contains("failed to parse config file"),
+            "got: {err}"
+        );
+        Ok(())
     }
 
     #[test]

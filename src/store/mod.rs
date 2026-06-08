@@ -194,17 +194,36 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(env: heed::Env, fst_path: PathBuf) -> Self {
+    pub fn new(env: heed::Env, fst_path: PathBuf) -> Result<Self, AppError> {
         Self::with_config(env, StoreConfig::default(), fst_path)
     }
 
-    pub fn with_config(env: heed::Env, config: StoreConfig, fst_path: PathBuf) -> Self {
-        let mut wtxn = env.write_txn().unwrap();
-        let db_meta = env.create_database(&mut wtxn, Some("meta")).unwrap();
-        let db_queue = env.create_database(&mut wtxn, Some("queue")).unwrap();
-        let db_docs = env.create_database(&mut wtxn, Some("docs")).unwrap();
-        let db_inverted = env.create_database(&mut wtxn, Some("inverted")).unwrap();
-        wtxn.commit().unwrap();
+    /// Construct a `Store` against an open LMDB environment. Fallible: any
+    /// I/O error during database creation or txn commit is propagated as
+    /// `AppError::Internal` so callers can log and bail cleanly instead of
+    /// panicking on startup.
+    pub fn with_config(
+        env: heed::Env,
+        config: StoreConfig,
+        fst_path: PathBuf,
+    ) -> Result<Self, AppError> {
+        let mut wtxn = env.write_txn().map_err(|e| {
+            AppError::Internal(format!("store: failed to open initial write txn: {e}"))
+        })?;
+        let db_meta = env
+            .create_database(&mut wtxn, Some("meta"))
+            .map_err(|e| AppError::Internal(format!("store: failed to create db_meta: {e}")))?;
+        let db_queue = env
+            .create_database(&mut wtxn, Some("queue"))
+            .map_err(|e| AppError::Internal(format!("store: failed to create db_queue: {e}")))?;
+        let db_docs = env
+            .create_database(&mut wtxn, Some("docs"))
+            .map_err(|e| AppError::Internal(format!("store: failed to create db_docs: {e}")))?;
+        let db_inverted = env
+            .create_database(&mut wtxn, Some("inverted"))
+            .map_err(|e| AppError::Internal(format!("store: failed to create db_inverted: {e}")))?;
+        wtxn.commit()
+            .map_err(|e| AppError::Internal(format!("store: failed to commit initial txn: {e}")))?;
 
         let collections = HashMap::new();
         let next_seq = Self::init_next_seq(&env, db_queue);
@@ -242,7 +261,7 @@ impl Store {
             );
         }
 
-        store
+        Ok(store)
     }
 
     /// Populate the in-memory collections cache from `db_meta`. Idempotent —
@@ -1027,20 +1046,25 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn test_store(conf: StoreConfig) -> (Store, tempfile::TempDir) {
-        let dir = tempfile::TempDir::new().unwrap();
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Propagate any setup error so tests can use `?` rather than `.unwrap()`.
+    fn test_store(
+        conf: StoreConfig,
+    ) -> Result<(Store, tempfile::TempDir), Box<dyn std::error::Error>> {
+        let dir = tempfile::TempDir::new()?;
+        // SAFETY: each call gets its own fresh tempdir; nothing else maps this path.
         let env = unsafe {
             heed::EnvOpenOptions::new()
                 .map_size(10 * 1024 * 1024)
                 .max_dbs(4)
-                .open(dir.path())
-                .unwrap()
+                .open(dir.path())?
         };
-        let store = Store::with_config(env, conf, dir.path().join("fst"));
-        (store, dir)
+        let store = Store::with_config(env, conf, dir.path().join("fst"))?;
+        Ok((store, dir))
     }
 
-    fn default_store() -> (Store, tempfile::TempDir) {
+    fn default_store() -> Result<(Store, tempfile::TempDir), Box<dyn std::error::Error>> {
         test_store(StoreConfig::default())
     }
 
@@ -1056,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn tokenize_basic() {
+    fn tokenize_basic() -> TestResult {
         let config = StoreConfig::default();
         let tokens = tokenize(
             "hello world",
@@ -1066,10 +1090,11 @@ mod tests {
         let mut sorted: Vec<_> = tokens.into_iter().collect();
         sorted.sort();
         assert_eq!(sorted, vec!["hello", "world"]);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_deduplicates() {
+    fn tokenize_deduplicates() -> TestResult {
         let config = StoreConfig::default();
         let tokens = tokenize(
             "foo foo foo",
@@ -1078,10 +1103,11 @@ mod tests {
         );
         assert_eq!(tokens.len(), 1);
         assert!(tokens.contains("foo"));
+        Ok(())
     }
 
     #[test]
-    fn tokenize_short_words_filtered() {
+    fn tokenize_short_words_filtered() -> TestResult {
         let config = StoreConfig {
             min_token_length: 3,
             ..Default::default()
@@ -1094,17 +1120,19 @@ mod tests {
         assert_eq!(tokens.len(), 2);
         assert!(tokens.contains("the"));
         assert!(tokens.contains("fox"));
+        Ok(())
     }
 
     #[test]
-    fn tokenize_empty() {
+    fn tokenize_empty() -> TestResult {
         let config = StoreConfig::default();
         let tokens = tokenize("", config.min_token_length, config.max_token_length);
         assert!(tokens.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn tokenize_only_short() {
+    fn tokenize_only_short() -> TestResult {
         let config = StoreConfig {
             min_token_length: 10,
             ..Default::default()
@@ -1115,50 +1143,56 @@ mod tests {
             config.max_token_length,
         );
         assert!(tokens.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn shard_key_format() {
+    fn shard_key_format() -> TestResult {
         let key = posting_list::shard_key("col", "hello", 42);
         assert_eq!(key, b"col\x00hello\x000042");
+        Ok(())
     }
 
     #[test]
-    fn shard_key_zero_padded() {
+    fn shard_key_zero_padded() -> TestResult {
         let key = posting_list::shard_key("col", "test", 0);
         assert_eq!(key, b"col\x00test\x000000");
         let key = posting_list::shard_key("col", "test", 9999);
         assert_eq!(key, b"col\x00test\x009999");
+        Ok(())
     }
 
     #[test]
-    fn id_type_serde_roundtrip() {
+    fn id_type_serde_roundtrip() -> TestResult {
         for id_type in &[IdType::String, IdType::Number] {
             let json = serde_json::to_string(id_type).unwrap();
             let back: IdType = serde_json::from_str(&json).unwrap();
             assert_eq!(*id_type, back);
         }
+        Ok(())
     }
 
     #[test]
-    fn id_type_string_serde_name() {
+    fn id_type_string_serde_name() -> TestResult {
         let json = serde_json::to_string(&IdType::String).unwrap();
         assert_eq!(json, "\"string\"");
         let json = serde_json::to_string(&IdType::Number).unwrap();
         assert_eq!(json, "\"number\"");
+        Ok(())
     }
 
     #[test]
-    fn store_config_defaults() {
+    fn store_config_defaults() -> TestResult {
         let cfg = StoreConfig::default();
         assert_eq!(cfg.min_token_length, 3);
         assert_eq!(cfg.max_token_length, 400);
         assert_eq!(cfg.max_string_shard_size, 1000);
         assert_eq!(cfg.max_roaring_shard_size, 100_000);
+        Ok(())
     }
 
     #[test]
-    fn tokenize_long_words_filtered() {
+    fn tokenize_long_words_filtered() -> TestResult {
         let config = StoreConfig {
             max_token_length: 4,
             ..Default::default()
@@ -1170,22 +1204,24 @@ mod tests {
         );
         assert!(!tokens.contains("hello")); // 5 chars, excluded by max_token_length
         assert!(tokens.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn create_and_list_collections() {
-        let (store, _dir) = default_store();
+    fn create_and_list_collections() -> TestResult {
+        let (store, _dir) = default_store()?;
         store.create_collection("mycol", "string", &[]).unwrap();
         let list = store.list_collections().unwrap();
         assert_eq!(list.collections.len(), 1);
         assert_eq!(list.collections[0].name, "mycol");
         assert_eq!(list.collections[0].id_type, "string");
         assert!(list.collections[0].searchable_fields.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn create_collection_with_fields() {
-        let (store, _dir) = default_store();
+    fn create_collection_with_fields() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["title".into(), "body".into()])
             .unwrap();
@@ -1193,37 +1229,41 @@ mod tests {
         assert_eq!(list.collections[0].searchable_fields, vec!["title", "body"]);
         let info = store.collection_info("docs").unwrap();
         assert_eq!(info.searchable_fields, vec!["title", "body"]);
+        Ok(())
     }
 
     #[test]
-    fn create_multiple_collections() {
-        let (store, _dir) = default_store();
+    fn create_multiple_collections() -> TestResult {
+        let (store, _dir) = default_store()?;
         store.create_collection("a", "string", &[]).unwrap();
         store.create_collection("b", "number", &[]).unwrap();
         let list = store.list_collections().unwrap();
         assert_eq!(list.collections.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn create_duplicate_collection_errors() {
-        let (store, _dir) = default_store();
+    fn create_duplicate_collection_errors() -> TestResult {
+        let (store, _dir) = default_store()?;
         store.create_collection("mycol", "string", &[]).unwrap();
         let err = store.create_collection("mycol", "string", &[]).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
+        Ok(())
     }
 
     #[test]
-    fn create_invalid_id_type_errors() {
-        let (store, _dir) = default_store();
+    fn create_invalid_id_type_errors() -> TestResult {
+        let (store, _dir) = default_store()?;
         let err = store
             .create_collection("mycol", "invalid", &[])
             .unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
+        Ok(())
     }
 
     #[test]
-    fn upsert_and_search_string() {
-        let (store, _dir) = default_store();
+    fn upsert_and_search_string() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1233,11 +1273,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
+        Ok(())
     }
 
     #[test]
-    fn upsert_and_search_number() {
-        let (store, _dir) = default_store();
+    fn upsert_and_search_number() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1247,11 +1288,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["42"]);
+        Ok(())
     }
 
     #[test]
-    fn search_multi_token_intersection() {
-        let (store, _dir) = default_store();
+    fn search_multi_token_intersection() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1269,11 +1311,12 @@ mod tests {
             .search("docs", "apple banana", false, 10, None)
             .unwrap();
         assert_eq!(ids(&results), vec!["1"]);
+        Ok(())
     }
 
     #[test]
-    fn search_no_match() {
-        let (store, _dir) = default_store();
+    fn search_no_match() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1285,11 +1328,12 @@ mod tests {
             .search("docs", "nonexistent", false, 10, None)
             .unwrap();
         assert!(results.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn search_empty_query() {
-        let (store, _dir) = default_store();
+    fn search_empty_query() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1299,11 +1343,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "", false, 10, None).unwrap();
         assert!(results.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn search_sort_asc() {
-        let (store, _dir) = default_store();
+    fn search_sort_asc() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1316,11 +1361,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["a", "b"]);
+        Ok(())
     }
 
     #[test]
-    fn search_sort_desc_default() {
-        let (store, _dir) = default_store();
+    fn search_sort_desc_default() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1333,11 +1379,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", true, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["b", "a"]);
+        Ok(())
     }
 
     #[test]
-    fn search_pagination_after() {
-        let (store, _dir) = default_store();
+    fn search_pagination_after() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1353,11 +1400,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, Some("a")).unwrap();
         assert_eq!(ids(&results), vec!["b", "c"]);
+        Ok(())
     }
 
     #[test]
-    fn search_pagination_after_desc() {
-        let (store, _dir) = default_store();
+    fn search_pagination_after_desc() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1373,11 +1421,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", true, 10, Some("c")).unwrap();
         assert_eq!(ids(&results), vec!["b", "a"]);
+        Ok(())
     }
 
     #[test]
-    fn search_take_limit() {
-        let (store, _dir) = default_store();
+    fn search_take_limit() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1393,11 +1442,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 2, None).unwrap();
         assert_eq!(results.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn upsert_update_reindex() -> Result<(), AppError> {
-        let (store, _dir) = default_store();
+    fn upsert_update_reindex() -> TestResult {
+        let (store, _dir) = default_store()?;
         store.create_collection("docs", "string", &["content".into()])?;
         store.upsert("docs", json!({"id": "1", "content": "apple banana"}))?;
         store.upsert("docs", json!({"id": "1", "content": "apple cherry"}))?;
@@ -1419,8 +1469,8 @@ mod tests {
     }
 
     #[test]
-    fn delete_item() {
-        let (store, _dir) = default_store();
+    fn delete_item() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1431,21 +1481,23 @@ mod tests {
         store.delete_item("docs", "1").unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert!(results.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn delete_nonexistent_item_errors() {
-        let (store, _dir) = default_store();
+    fn delete_nonexistent_item_errors() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
         let err = store.delete_item("docs", "1").unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
+        Ok(())
     }
 
     #[test]
-    fn delete_and_reinsert() {
-        let (store, _dir) = default_store();
+    fn delete_and_reinsert() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1460,11 +1512,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
+        Ok(())
     }
 
     #[test]
-    fn collection_info() {
-        let (store, _dir) = default_store();
+    fn collection_info() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1476,21 +1529,23 @@ mod tests {
         assert_eq!(info.name, "docs");
         assert_eq!(info.id_type, "string");
         assert_eq!(info.document_count, 1);
+        Ok(())
     }
 
     #[test]
-    fn collection_info_empty() {
-        let (store, _dir) = default_store();
+    fn collection_info_empty() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
         let info = store.collection_info("docs").unwrap();
         assert_eq!(info.document_count, 0);
+        Ok(())
     }
 
     #[test]
-    fn delete_collection() {
-        let (store, _dir) = default_store();
+    fn delete_collection() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1500,29 +1555,32 @@ mod tests {
         store.delete_collection("docs").unwrap();
         let list = store.list_collections().unwrap();
         assert!(list.collections.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn search_on_nonexistent_collection() {
-        let (store, _dir) = default_store();
+    fn search_on_nonexistent_collection() -> TestResult {
+        let (store, _dir) = default_store()?;
         let err = store
             .search("nonexistent", "hello", false, 10, None)
             .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
+        Ok(())
     }
 
     #[test]
-    fn upsert_on_nonexistent_collection() {
-        let (store, _dir) = default_store();
+    fn upsert_on_nonexistent_collection() -> TestResult {
+        let (store, _dir) = default_store()?;
         let err = store
             .upsert("nonexistent", json!({"id": "1", "content": "hello"}))
             .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
+        Ok(())
     }
 
     #[test]
-    fn upsert_invalid_numeric_id() {
-        let (store, _dir) = default_store();
+    fn upsert_invalid_numeric_id() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1530,11 +1588,12 @@ mod tests {
             .upsert("docs", json!({"id": "not-a-number", "content": "hello"}))
             .unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
+        Ok(())
     }
 
     #[test]
-    fn search_number_sort_asc() {
-        let (store, _dir) = default_store();
+    fn search_number_sort_asc() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1550,11 +1609,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1", "2", "3"]);
+        Ok(())
     }
 
     #[test]
-    fn search_number_sort_desc() {
-        let (store, _dir) = default_store();
+    fn search_number_sort_desc() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1567,11 +1627,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", true, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["2", "1"]);
+        Ok(())
     }
 
     #[test]
-    fn search_number_pagination() {
-        let (store, _dir) = default_store();
+    fn search_number_pagination() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1587,11 +1648,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, Some("1")).unwrap();
         assert_eq!(ids(&results), vec!["2", "3"]);
+        Ok(())
     }
 
     #[test]
-    fn upsert_string_idempotent() {
-        let (store, _dir) = default_store();
+    fn upsert_string_idempotent() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1604,11 +1666,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
+        Ok(())
     }
 
     #[test]
-    fn upsert_number_idempotent() {
-        let (store, _dir) = default_store();
+    fn upsert_number_idempotent() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1621,15 +1684,16 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 10, None).unwrap();
         assert_eq!(ids(&results), vec!["1"]);
+        Ok(())
     }
 
     #[test]
-    fn shard_splitting_string() {
+    fn shard_splitting_string() -> TestResult {
         let conf = StoreConfig {
             max_string_shard_size: 3,
             ..Default::default()
         };
-        let (store, _dir) = test_store(conf);
+        let (store, _dir) = test_store(conf)?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1641,15 +1705,16 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 20, None).unwrap();
         assert_eq!(results.len(), 10);
+        Ok(())
     }
 
     #[test]
-    fn shard_splitting_roaring() {
+    fn shard_splitting_roaring() -> TestResult {
         let conf = StoreConfig {
             max_roaring_shard_size: 3,
             ..Default::default()
         };
-        let (store, _dir) = test_store(conf);
+        let (store, _dir) = test_store(conf)?;
         store
             .create_collection("docs", "number", &["content".into()])
             .unwrap();
@@ -1661,11 +1726,12 @@ mod tests {
         store.flush().unwrap();
         let results = store.search("docs", "hello", false, 20, None).unwrap();
         assert_eq!(results.len(), 10);
+        Ok(())
     }
 
     #[test]
-    fn searchable_fields_only_indexed() {
-        let (store, _dir) = default_store();
+    fn searchable_fields_only_indexed() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["title".into()])
             .unwrap();
@@ -1686,11 +1752,12 @@ mod tests {
         assert_eq!(r1[0]["title"], "hello");
         assert_eq!(r1[0]["body"], "world");
         assert_eq!(r1[0]["ignored"], "yes");
+        Ok(())
     }
 
     #[test]
-    fn upsert_missing_id_errors() {
-        let (store, _dir) = default_store();
+    fn upsert_missing_id_errors() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["content".into()])
             .unwrap();
@@ -1698,11 +1765,12 @@ mod tests {
             .upsert("docs", json!({"content": "hello"}))
             .unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
+        Ok(())
     }
 
     #[test]
-    fn search_returns_full_documents() {
-        let (store, _dir) = default_store();
+    fn search_returns_full_documents() -> TestResult {
+        let (store, _dir) = default_store()?;
         store
             .create_collection("docs", "string", &["title".into(), "body".into()])
             .unwrap();
@@ -1718,6 +1786,7 @@ mod tests {
         assert_eq!(results[0]["id"], "1");
         assert_eq!(results[0]["title"], "hello");
         assert_eq!(results[0]["body"], "world");
+        Ok(())
     }
 
     /// Inject a queue entry directly into LMDB. Used to simulate a stale
@@ -1729,7 +1798,7 @@ mod tests {
         collection: &str,
         id: &str,
         doc: &serde_json::Value,
-    ) -> Result<(), AppError> {
+    ) -> TestResult {
         let document = serde_json::to_vec(doc).map_err(|e| AppError::Internal(e.to_string()))?;
         let entry = config::QueuedIndex {
             collection: collection.to_string(),
@@ -1749,7 +1818,7 @@ mod tests {
     }
 
     #[test]
-    fn collection_name_validator_accepts_safe_names() -> Result<(), AppError> {
+    fn collection_name_validator_accepts_safe_names() -> TestResult {
         for name in [
             "a",
             "Z",
@@ -1768,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn collection_name_validator_rejects_unsafe_names() {
+    fn collection_name_validator_rejects_unsafe_names() -> TestResult {
         // Each name maps to the same FST file as another via the lossy
         // [^A-Za-z0-9_-] → '_' encoding, OR contains characters that would
         // not be filesystem-safe across platforms.
@@ -1780,21 +1849,23 @@ mod tests {
             let err = validate_collection_name(name).expect_err(name);
             assert!(matches!(err, AppError::BadRequest(_)), "name={name}");
         }
+        Ok(())
     }
 
     #[test]
-    fn collection_name_validator_rejects_too_long() {
+    fn collection_name_validator_rejects_too_long() -> TestResult {
         let long: String = "a".repeat(COLLECTION_NAME_MAX_LEN + 1);
         let err = validate_collection_name(&long).expect_err("too long");
         assert!(matches!(err, AppError::BadRequest(_)));
+        Ok(())
     }
 
     #[test]
-    fn create_collection_rejects_colliding_names() -> Result<(), AppError> {
+    fn create_collection_rejects_colliding_names() -> TestResult {
         // Regression: previously `FSTPool::collection_path` lossy-mapped
         // any non-[A-Za-z0-9_-] char to '_', so 'foo bar' and 'foo/bar'
         // both produced 'foo_bar.fst' and overwrote each other.
-        let (store, _dir) = default_store();
+        let (store, _dir) = default_store()?;
         let res = store.create_collection("foo bar", "string", &[]);
         assert!(matches!(res, Err(AppError::BadRequest(_))));
         let res = store.create_collection("foo/bar", "string", &[]);
@@ -1805,7 +1876,7 @@ mod tests {
     }
 
     #[test]
-    fn process_pending_queue_survives_restart_with_unwarmed_cache() -> Result<(), AppError> {
+    fn process_pending_queue_survives_restart_with_unwarmed_cache() -> TestResult {
         // Regression: previously `process_pending_queue` only consulted the
         // in-memory collections cache. After a process restart (or any code
         // path where the background indexer fires before any user request),
@@ -1822,7 +1893,7 @@ mod tests {
                     .max_dbs(4)
                     .open(dir.path())?
             };
-            let store = Store::new(env, dir.path().join("fst"));
+            let store = Store::new(env, dir.path().join("fst"))?;
             store.create_collection("docs", "string", &["content".into()])?;
             store.upsert("docs", json!({"id": "1", "content": "important data"}))?;
             // No flush — the entry must persist in db_queue across restart.
@@ -1840,7 +1911,7 @@ mod tests {
                     .max_dbs(4)
                     .open(dir.path())?
             };
-            let store = Store::new(env, dir.path().join("fst"));
+            let store = Store::new(env, dir.path().join("fst"))?;
             // Drive the indexer without calling validate_collection_exists
             // (which would otherwise warm the cache as a side effect).
             store.flush()?;
@@ -1853,14 +1924,14 @@ mod tests {
     }
 
     #[test]
-    fn process_pending_queue_drops_bad_numeric_id_instead_of_stalling() -> Result<(), AppError> {
+    fn process_pending_queue_drops_bad_numeric_id_instead_of_stalling() -> TestResult {
         // Regression test: previously a single queue entry with a non-numeric
         // id in a number-id collection (e.g., one written by an older binary
         // before float-id rejection) caused process_pending_queue to abort
         // its write txn with `?` propagation; the bad entry stayed in the
         // queue and every subsequent indexing cycle hit it again — permanent
         // ingest stall.
-        let (store, _dir) = default_store();
+        let (store, _dir) = default_store()?;
         store.create_collection("docs", "number", &["content".into()])?;
 
         // Inject the bad entry directly into LMDB, then a good one via the
