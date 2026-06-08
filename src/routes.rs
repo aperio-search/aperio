@@ -252,11 +252,9 @@ async fn export_handler(
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String), AppError> {
             let data = store.export_snapshot()?;
             let file = dump_filename();
-            let path = dumps.join(&file);
             std::fs::create_dir_all(&dumps)
                 .map_err(|e| AppError::Internal(format!("failed to create dumps folder: {e}")))?;
-            std::fs::write(&path, &data)
-                .map_err(|e| AppError::Internal(format!("failed to write export file: {e}")))?;
+            write_dump_atomically(&dumps, &file, &data)?;
             Ok((data, file))
         })
         .await
@@ -268,6 +266,26 @@ async fn export_handler(
         size,
         file,
     }))
+}
+
+/// Write a dump file atomically: write to `<name>.tmp`, fsync, then rename
+/// onto the final name. A crash mid-write leaves only the `.tmp` file (which
+/// a subsequent export can overwrite) — the final-named file is either the
+/// fully synced previous attempt or the complete new one, never a torn write.
+fn write_dump_atomically(dumps: &std::path::Path, name: &str, data: &[u8]) -> Result<(), AppError> {
+    use std::io::Write;
+    let final_path = dumps.join(name);
+    let tmp_path = dumps.join(format!("{name}.tmp"));
+    let mut f = std::fs::File::create(&tmp_path)
+        .map_err(|e| AppError::Internal(format!("failed to create tmp dump: {e}")))?;
+    f.write_all(data)
+        .map_err(|e| AppError::Internal(format!("failed to write tmp dump: {e}")))?;
+    f.sync_all()
+        .map_err(|e| AppError::Internal(format!("failed to fsync tmp dump: {e}")))?;
+    drop(f);
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| AppError::Internal(format!("failed to rename dump into place: {e}")))?;
+    Ok(())
 }
 
 async fn import_handler(
