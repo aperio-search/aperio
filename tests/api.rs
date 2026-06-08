@@ -299,6 +299,44 @@ async fn create_collection_invalid_id_type() {
 }
 
 #[tokio::test]
+async fn search_rejects_invalid_after_cursor_on_number_collection()
+-> Result<(), aperio::error::AppError> {
+    // Regression: previously a malformed `after` value on a number-id
+    // collection was silently dropped (`and_then(|a| a.parse::<u64>().ok())`)
+    // and pagination restarted, producing duplicate page-1 results.
+    let (app, _dir, store) = test_app();
+
+    let req = json_request(
+        Method::POST,
+        "/collections",
+        json!({"name": "docs", "id_type": "number", "searchable_fields": ["content"]}),
+    );
+    send(&app, req).await;
+    let req = json_request(
+        Method::POST,
+        "/collections/docs/items",
+        json!({"id": 1, "content": "hello"}),
+    );
+    send(&app, req).await;
+    // Drain the indexing queue so the token bitmap isn't empty (an empty
+    // bitmap short-circuits search before the cursor is parsed, masking
+    // the bug we're regression-testing).
+    store.flush()?;
+
+    let (status, body) = send(
+        &app,
+        get_request("/collections/docs/search?q=hello&after=not-a-number"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("after"),
+        "body should reference the after cursor: {body:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn upsert_rejects_non_integer_numeric_id() {
     // Regression: previously a JSON Number was accepted for a number-id
     // collection regardless of whether it was an integer (1.0 → "1.0"), which

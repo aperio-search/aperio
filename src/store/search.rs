@@ -124,7 +124,19 @@ pub fn roaring_search(params: SearchParams) -> Result<Vec<String>, AppError> {
 
     word_bitmaps.sort_by_key(|b| b.len());
     let bitmap = word_bitmaps.iter().intersection();
-    let after_val = after.and_then(|a| a.parse::<u64>().ok());
+    // Parse the cursor strictly. Previously this used
+    // `after.and_then(|a| a.parse::<u64>().ok())`, which silently swallowed
+    // malformed values and restarted pagination from the beginning — every
+    // page after a bad cursor would duplicate page 1. Number-id collections
+    // use u64 cursors; anything else is a client error.
+    let after_val = match after {
+        Some(a) => Some(a.parse::<u64>().map_err(|parse_err| {
+            AppError::BadRequest(format!(
+                "invalid 'after' cursor '{a}': must be a non-negative integer for number-id collection: {parse_err}"
+            ))
+        })?),
+        None => None,
+    };
     let iter: Box<dyn Iterator<Item = u64>> = if sort_desc {
         Box::new(bitmap.into_iter().rev())
     } else {
