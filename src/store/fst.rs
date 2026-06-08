@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use fst::automaton::{Levenshtein, Str};
 use fst::{Automaton, IntoStreamer, Set, SetBuilder, Streamer};
+// `parking_lot::Mutex` does not poison on panic, so `.lock()` returns the
+// guard directly without a `Result`. Every lock-acquisition site below
+// uses this form.
+use parking_lot::Mutex;
 
 use super::config::FSTConfig;
 
@@ -175,7 +179,15 @@ impl CollectionFST {
 
         let lev = match Levenshtein::new(word, dist) {
             Ok(l) => l,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::warn!(
+                    word = %word,
+                    distance = dist,
+                    error = %e,
+                    "FST fuzzy search: failed to build Levenshtein automaton; returning empty results"
+                );
+                return Vec::new();
+            }
         };
 
         let mut stream = set.search(&lev).into_stream();
@@ -254,7 +266,7 @@ impl FSTPool {
     }
 
     fn get_or_create(&self, collection: &str) -> Arc<Mutex<CollectionFST>> {
-        let mut stores = self.stores.lock().unwrap();
+        let mut stores = self.stores.lock();
         if let Some(existing) = stores.get(collection) {
             return Arc::clone(existing);
         }
@@ -270,7 +282,7 @@ impl FSTPool {
             return;
         }
         let fst = self.get_or_create(collection);
-        let mut guard = fst.lock().unwrap();
+        let mut guard = fst.lock();
         for word in words {
             guard.push_word(word.as_bytes());
         }
@@ -281,7 +293,7 @@ impl FSTPool {
             return;
         }
         let fst = self.get_or_create(collection);
-        let mut guard = fst.lock().unwrap();
+        let mut guard = fst.lock();
         for word in words {
             guard.pop_word(word.as_bytes());
         }
@@ -292,7 +304,7 @@ impl FSTPool {
             return false;
         }
         let fst = self.get_or_create(collection);
-        let guard = fst.lock().unwrap();
+        let guard = fst.lock();
         guard.contains(word.as_bytes())
     }
 
@@ -301,7 +313,7 @@ impl FSTPool {
             return Vec::new();
         }
         let fst = self.get_or_create(collection);
-        let guard = fst.lock().unwrap();
+        let guard = fst.lock();
         guard.search_prefix(prefix, limit)
     }
 
@@ -316,7 +328,7 @@ impl FSTPool {
             return Vec::new();
         }
         let fst = self.get_or_create(collection);
-        let guard = fst.lock().unwrap();
+        let guard = fst.lock();
         guard.search_fuzzy(word, limit, max_distance)
     }
 
@@ -325,7 +337,7 @@ impl FSTPool {
             return Vec::new();
         }
         let fst = self.get_or_create(collection);
-        let guard = fst.lock().unwrap();
+        let guard = fst.lock();
         guard.list_words(limit, offset)
     }
 
@@ -334,7 +346,7 @@ impl FSTPool {
             return 0;
         }
         let fst = self.get_or_create(collection);
-        let guard = fst.lock().unwrap();
+        let guard = fst.lock();
         guard.word_count()
     }
 
@@ -343,7 +355,7 @@ impl FSTPool {
             return Ok(());
         }
         let fst = self.get_or_create(collection);
-        let mut guard = fst.lock().unwrap();
+        let mut guard = fst.lock();
         guard.consolidate(&self.config)
     }
 
@@ -352,10 +364,10 @@ impl FSTPool {
             return;
         }
         let collections: Vec<String> = {
-            let stores = self.stores.lock().unwrap();
+            let stores = self.stores.lock();
             stores
                 .iter()
-                .filter(|(_, fst)| fst.lock().unwrap().needs_consolidate(&self.config))
+                .filter(|(_, fst)| fst.lock().needs_consolidate(&self.config))
                 .map(|(name, _)| name.clone())
                 .collect()
         };
@@ -374,7 +386,7 @@ impl FSTPool {
             return;
         }
         {
-            let mut stores = self.stores.lock().unwrap();
+            let mut stores = self.stores.lock();
             stores.remove(collection);
         }
         let path = self.collection_path(collection);
@@ -386,7 +398,7 @@ impl FSTPool {
             return;
         }
         {
-            let mut stores = self.stores.lock().unwrap();
+            let mut stores = self.stores.lock();
             stores.clear();
         }
         std::fs::remove_dir_all(&self.base_path).ok();

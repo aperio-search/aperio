@@ -56,6 +56,7 @@ dependencies = [
  "fst",
  "heed",
  "http-body-util",
+ "parking_lot",
  "pretty_assertions",
  "rayon",
  "rkyv",

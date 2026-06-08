@@ -2,11 +2,15 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, RwLock};
 
 use charabia::Tokenize;
 use heed::types::Unit;
 use heed::{BoxedError, BytesDecode, BytesEncode};
+// `parking_lot::Mutex` / `RwLock` do not poison on panic, so `.lock()` /
+// `.read()` / `.write()` return their guards directly without a `Result`.
+// This eliminates a large class of panic sites (every `.lock()`)
+// without changing semantics in the no-panic path.
+use parking_lot::{Mutex, RwLock};
 use roaring::RoaringTreemap;
 
 use crate::error::AppError;
@@ -279,37 +283,53 @@ impl Store {
                     continue;
                 }
             };
-            match self.collections.write() {
-                Ok(mut map) => {
-                    map.insert(name, meta);
-                    loaded += 1;
-                }
-                Err(e) => {
-                    // Poisoned lock — log and abort the warm; subsequent
-                    // callers will hit the same poison and recover via the
-                    // lazy fallback.
-                    return Err(AppError::Internal(format!(
-                        "collections cache lock poisoned during warm: {e}"
-                    )));
-                }
-            }
+            self.collections.write().insert(name, meta);
+            loaded += 1;
         }
         tracing::debug!(loaded, "warmed collections cache from db_meta");
         Ok(())
     }
 
     fn init_next_seq(env: &heed::Env, db_queue: DbBytes) -> u64 {
+        // Best-effort scan of `db_queue` for the highest existing sequence
+        // number. Any read error here is non-fatal — we fall back to
+        // starting from 1, which is safe because subsequent upserts only
+        // need monotonically increasing seq numbers within a single live
+        // queue, and any pre-existing higher seq number would only collide
+        // on a key that was already drained on a prior cycle. Errors are
+        // logged so an operator can investigate.
         let rtxn = match env.read_txn() {
             Ok(t) => t,
-            Err(_) => return 1,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "init_next_seq: failed to open read txn — falling back to seq=1"
+                );
+                return 1;
+            }
         };
         let mut real_max = 0u64;
-        let iter = db_queue.remap_data_type::<Unit>().iter(&rtxn);
-        let all_keys: Vec<Vec<u8>> = match iter {
-            Ok(it) => it.filter_map(|r| r.ok()).map(|(k, _)| k).collect(),
-            Err(_) => Vec::new(),
+        let iter = match db_queue.remap_data_type::<Unit>().iter(&rtxn) {
+            Ok(it) => it,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "init_next_seq: failed to open db_queue iter — falling back to seq=1"
+                );
+                return 1;
+            }
         };
-        for key in all_keys {
+        for result in iter {
+            let (key, _) = match result {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "init_next_seq: skipping unreadable db_queue entry"
+                    );
+                    continue;
+                }
+            };
             if key.len() == 8 {
                 let mut buf = [0u8; 8];
                 buf.copy_from_slice(&key);
@@ -331,7 +351,7 @@ impl Store {
         collection: &str,
     ) -> Result<config::CollectionMeta, AppError> {
         // Check cache first
-        if let Some(meta) = self.collections.read().unwrap().get(collection).cloned() {
+        if let Some(meta) = self.collections.read().get(collection).cloned() {
             return Ok(meta);
         }
         // Fall back to database
@@ -341,7 +361,6 @@ impl Store {
         {
             self.collections
                 .write()
-                .unwrap()
                 .insert(collection.to_string(), meta.clone());
             return Ok(meta);
         }
@@ -369,10 +388,10 @@ impl Store {
             }
         };
 
-        let _lock = self.lock.lock().unwrap();
+        let _lock = self.lock.lock();
 
         {
-            let mut map = self.collections.write().unwrap();
+            let mut map = self.collections.write();
             if map.contains_key(name) {
                 return Err(AppError::BadRequest(format!(
                     "collection '{}' already exists",
@@ -508,16 +527,8 @@ impl Store {
             // miss (the cache is empty until something populates it; without
             // this fallback the background indexer could drop every queued
             // item on process restart before any user request had warmed
-            // the cache). A poisoned cache lock is an internal-error
-            // condition; propagate it rather than mask it.
-            let cache_hit = self
-                .collections
-                .read()
-                .map_err(|e| {
-                    AppError::Internal(format!("collections cache read lock poisoned: {e}"))
-                })?
-                .get(&entry.collection)
-                .cloned();
+            // the cache).
+            let cache_hit = self.collections.read().get(&entry.collection).cloned();
             let meta = match cache_hit {
                 Some(m) => m,
                 None => match self.db_meta.get(&wtxn, entry.collection.as_bytes())? {
@@ -525,11 +536,6 @@ impl Store {
                         Ok(m) => {
                             self.collections
                                 .write()
-                                .map_err(|e| {
-                                    AppError::Internal(format!(
-                                        "collections cache write lock poisoned: {e}"
-                                    ))
-                                })?
                                 .insert(entry.collection.clone(), m.clone());
                             m
                         }
@@ -823,7 +829,7 @@ impl Store {
         self.process_pending_queue()?;
         let meta = self.validate_collection_exists(collection)?;
 
-        let _lock = self.lock.lock().unwrap();
+        let _lock = self.lock.lock();
 
         let mut wtxn = self.env.write_txn()?;
 
@@ -901,10 +907,10 @@ impl Store {
     }
 
     pub fn list_collections(&self) -> Result<ListCollectionsResponse, AppError> {
-        if self.collections.read().unwrap().is_empty() {
+        if self.collections.read().is_empty() {
             self.refresh_collections_cache()?;
         }
-        let map = self.collections.read().unwrap();
+        let map = self.collections.read();
         let collections: Vec<CollectionSummary> = map
             .iter()
             .map(|(name, meta)| CollectionSummary {
@@ -945,16 +951,16 @@ impl Store {
                 }
             }
         }
-        *self.collections.write().unwrap() = map;
+        *self.collections.write() = map;
         Ok(())
     }
 
     pub fn delete_collection(&self, collection: &str) -> Result<(), AppError> {
         let _meta = self.validate_collection_exists(collection)?;
 
-        let _lock = self.lock.lock().unwrap();
+        let _lock = self.lock.lock();
 
-        self.collections.write().unwrap().remove(collection);
+        self.collections.write().remove(collection);
 
         let prefix = doc_prefix(collection);
 
