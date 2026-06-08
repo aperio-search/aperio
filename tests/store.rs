@@ -501,10 +501,10 @@ fn import_with_bad_payload_does_not_wipe_existing_data() {
 
     // Various bad payloads.
     let bad_payloads: [&[u8]; 4] = [
-        b"garbage data",     // wrong magic
-        b"APIOEXPT",         // magic but truncated
+        b"garbage data",             // wrong magic
+        b"APIOEXPT",                 // magic but truncated
         b"APIOEXPT\x99\x00\x00\x00", // wrong version
-        b"",                 // empty
+        b"",                         // empty
     ];
     for payload in bad_payloads {
         let _ = store.import_snapshot(payload); // ignore error variant

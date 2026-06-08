@@ -317,9 +317,9 @@ fn validate_dump_filename(name: &str) -> Result<(), AppError> {
         || name == "."
         || name == ".."
         || !name.ends_with(".aperio")
-        || name.chars().any(|c| {
-            !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == ':')
-        });
+        || name
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' || c == ':'));
     if bad {
         return Err(AppError::BadRequest(
             "invalid dump filename: must be ASCII alphanumeric (plus '.', '_', '-', ':') and end with .aperio".into(),
