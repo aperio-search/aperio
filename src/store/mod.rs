@@ -1284,22 +1284,23 @@ mod tests {
     }
 
     #[test]
-    fn upsert_update_reindex() {
+    fn upsert_update_reindex() -> Result<(), AppError> {
         let (store, _dir) = default_store();
-        store
-            .create_collection("docs", "string", &["content".into()])
-            .unwrap();
-        store
-            .upsert("docs", json!({"id": "1", "content": "apple banana"}))
-            .unwrap();
-        store
-            .upsert("docs", json!({"id": "1", "content": "apple cherry"}))
-            .unwrap();
-        store.flush().unwrap();
-        let r1 = store.search("docs", "banana", false, 10, None).unwrap();
-        let r2 = store.search("docs", "cherry", false, 10, None).unwrap();
-        let r3 = store.search("docs", "apple", false, 10, None).unwrap();
+        store.create_collection("docs", "string", &["content".into()])?;
+        store.upsert("docs", json!({"id": "1", "content": "apple banana"}))?;
+        store.upsert("docs", json!({"id": "1", "content": "apple cherry"}))?;
+        store.flush()?;
+        // banana was in the original content but removed in the second upsert
+        // — must no longer be searchable.
+        let r1 = store.search("docs", "banana", false, 10, None)?;
+        assert!(r1.is_empty(), "expected banana to be reindexed away: {r1:?}");
+        // cherry was added in the second upsert.
+        let r2 = store.search("docs", "cherry", false, 10, None)?;
+        assert_eq!(ids(&r2), vec!["1"]);
+        // apple was present in both versions.
+        let r3 = store.search("docs", "apple", false, 10, None)?;
         assert_eq!(ids(&r3), vec!["1"]);
+        Ok(())
     }
 
     #[test]
