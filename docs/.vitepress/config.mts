@@ -109,7 +109,7 @@ export default defineConfig({
     },
     footer: {
       copyright:
-        '© 2026 <a href="https://github.com/andresribeiro">André Ribeiro</a>',
+        '© 2026 <a href="https://github.com/andresribeiro">André Ribeiro</a> · <a href="https://obelinf.com">Obelinf.com</a>',
     },
     socialLinks: [
       { icon: "github", link: "https://github.com/aperio-search/aperio" },
